@@ -272,6 +272,58 @@ body:not(:has(.float-tune-chrome.is-hidden)) .float-tune-toggle {
   background: rgba(255, 255, 255, 0.08);
 }
 
+.float-tune-stipple {
+  margin-top: 0.45rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.float-tune-stipple__title {
+  margin: 0 0 0.3rem;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 230, 190, 0.7);
+}
+
+.float-tune-mode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.float-tune-mode .view-btn {
+  padding: 0.2rem 0.45rem;
+  font-size: 0.58rem;
+}
+
+.float-tune-row--color {
+  grid-template-rows: auto;
+}
+
+.float-tune-row--color input[type="color"] {
+  grid-column: 2;
+  width: 2rem;
+  height: 1.15rem;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.float-tune-mode--wrap {
+  align-items: flex-start;
+}
+
+.float-tune-mode--wrap .view-btn {
+  margin-bottom: 0.15rem;
+}
+
 /* TEMP: top-view composition aids */
 .comp-labels {
   position: fixed;

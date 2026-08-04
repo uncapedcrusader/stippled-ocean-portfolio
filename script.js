@@ -646,6 +646,933 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   keyLight.position.set(6, 12, 8);
   scene.add(keyLight);
 
+  // ─── Projects contour stipple (appearance only; composition untouched) ──
+  // Why adaptive Points / EdgesGeometry failed the reference:
+  // Outer silhouettes are camera-dependent screen-space depth discontinuities,
+  // not fixed mesh creases. Uniform surface points fill the projection into an
+  // orb and cannot express a contour-led engraving hierarchy.
+  //
+  // Hybrid layers: (A) screen-space depth/normal contours → stippled
+  //                (B) sparse dim surface dots
+  //                (C) invisible mesh depth for occlusion
+
+  const CONTOUR_LAYER = 1;
+  const CONTOUR_STORAGE_KEY = "stippled-ocean-proj-contour-stipple-v1";
+  const CONTOUR_SURFACE_SEED = 0xc07a01;
+  const CONTOUR_SURFACE_COUNT = 5500;
+
+  [
+    "stippled-ocean-proj-stipple-proto-v1",
+    "stippled-ocean-proj-adaptive-stipple-v1",
+  ].forEach((k) => localStorage.removeItem(k));
+
+  // Immutable snapshot of the successful Digital Matrix appearance — never mutate.
+  const DIGITAL_MATRIX_LEGACY = Object.freeze({
+    silhouette: 0.9,
+    internal: 0.55,
+    edgeThreshold: 0.45,
+    stippleSpacing: 2.2,
+    contourCssPx: 0.9,
+    surfaceStrength: 0.25,
+    surfaceCssPx: 0.65,
+    surfaceDensity: 0.55,
+    contourColor: "#f4efe6",
+    surfaceColor: "#d8d2c8",
+  });
+
+  const CONTOUR_DEFAULTS = {
+    mode: "contour", // "solid" | "contour"
+    grainStyle: "digital", // "digital" | "distressed" — Digital Matrix is the safe default
+    ...DIGITAL_MATRIX_LEGACY,
+    organicDistortion: 0.4,
+    textureBreakup: 0.45,
+    debug: "final", // final | depth | normals | edges
+  };
+
+  function applyDigitalMatrixLegacy(settings) {
+    return {
+      ...settings,
+      grainStyle: "digital",
+      silhouette: DIGITAL_MATRIX_LEGACY.silhouette,
+      internal: DIGITAL_MATRIX_LEGACY.internal,
+      edgeThreshold: DIGITAL_MATRIX_LEGACY.edgeThreshold,
+      stippleSpacing: DIGITAL_MATRIX_LEGACY.stippleSpacing,
+      contourCssPx: DIGITAL_MATRIX_LEGACY.contourCssPx,
+      surfaceStrength: DIGITAL_MATRIX_LEGACY.surfaceStrength,
+      surfaceCssPx: DIGITAL_MATRIX_LEGACY.surfaceCssPx,
+      surfaceDensity: DIGITAL_MATRIX_LEGACY.surfaceDensity,
+      contourColor: DIGITAL_MATRIX_LEGACY.contourColor,
+      surfaceColor: DIGITAL_MATRIX_LEGACY.surfaceColor,
+    };
+  }
+
+  function loadContourSettings() {
+    try {
+      const raw = localStorage.getItem(CONTOUR_STORAGE_KEY);
+      if (!raw) return applyDigitalMatrixLegacy({ ...CONTOUR_DEFAULTS });
+      const p = JSON.parse(raw);
+      const debugOk = ["final", "depth", "normals", "edges"].includes(p.debug);
+      // Failed "organic" scatter is retired — fall back to Digital Matrix.
+      // "distressed" is the new alternative derived from Digital Matrix.
+      let grainStyle = "digital";
+      if (p.grainStyle === "distressed") grainStyle = "distressed";
+      else if (p.grainStyle === "organic") grainStyle = "digital";
+
+      const base = {
+        mode: p.mode === "solid" ? "solid" : "contour",
+        grainStyle,
+        silhouette: THREE.MathUtils.clamp(
+          Number(p.silhouette) ?? DIGITAL_MATRIX_LEGACY.silhouette,
+          0,
+          1
+        ),
+        internal: THREE.MathUtils.clamp(
+          Number(p.internal) ?? DIGITAL_MATRIX_LEGACY.internal,
+          0,
+          1
+        ),
+        edgeThreshold: THREE.MathUtils.clamp(
+          Number(p.edgeThreshold) ?? DIGITAL_MATRIX_LEGACY.edgeThreshold,
+          0.05,
+          1.5
+        ),
+        stippleSpacing: THREE.MathUtils.clamp(
+          Number(p.stippleSpacing) ?? DIGITAL_MATRIX_LEGACY.stippleSpacing,
+          1.2,
+          5
+        ),
+        contourCssPx: THREE.MathUtils.clamp(
+          Number(p.contourCssPx) ?? DIGITAL_MATRIX_LEGACY.contourCssPx,
+          0.5,
+          1.3
+        ),
+        surfaceStrength: THREE.MathUtils.clamp(
+          Number(p.surfaceStrength) ?? DIGITAL_MATRIX_LEGACY.surfaceStrength,
+          0,
+          0.6
+        ),
+        surfaceCssPx: THREE.MathUtils.clamp(
+          Number(p.surfaceCssPx) ?? DIGITAL_MATRIX_LEGACY.surfaceCssPx,
+          0.4,
+          0.9
+        ),
+        surfaceDensity: THREE.MathUtils.clamp(
+          Number(p.surfaceDensity) ?? DIGITAL_MATRIX_LEGACY.surfaceDensity,
+          0.15,
+          1
+        ),
+        organicDistortion: THREE.MathUtils.clamp(
+          Number(p.organicDistortion) ?? 0.4,
+          0,
+          1
+        ),
+        textureBreakup: THREE.MathUtils.clamp(
+          Number(p.textureBreakup) ?? 0.45,
+          0,
+          1
+        ),
+        contourColor:
+          typeof p.contourColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.contourColor)
+            ? p.contourColor
+            : DIGITAL_MATRIX_LEGACY.contourColor,
+        surfaceColor:
+          typeof p.surfaceColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.surfaceColor)
+            ? p.surfaceColor
+            : DIGITAL_MATRIX_LEGACY.surfaceColor,
+        debug: debugOk ? p.debug : "final",
+      };
+      // Digital Matrix always snaps appearance constants to the immutable legacy preset
+      if (base.grainStyle === "digital") return applyDigitalMatrixLegacy(base);
+      return base;
+    } catch (_) {
+      return applyDigitalMatrixLegacy({ ...CONTOUR_DEFAULTS });
+    }
+  }
+
+  function saveContourSettings(settings) {
+    localStorage.setItem(CONTOUR_STORAGE_KEY, JSON.stringify(settings));
+  }
+
+  function seededUnitRandom(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // Projects-only capture: view-space normal (rgb) + camera depth (a)
+  const contourCaptureMaterial = new THREE.ShaderMaterial({
+    uniforms: {},
+    side: THREE.FrontSide,
+    fog: false,
+    vertexShader: /* glsl */ `
+      varying vec3 vViewNormal;
+      varying float vViewZ;
+      void main() {
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vViewNormal = normalize(normalMatrix * normal);
+        vViewZ = -mv.z;
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying vec3 vViewNormal;
+      varying float vViewZ;
+      void main() {
+        vec3 n = normalize(vViewNormal);
+        // Pack view normal; alpha = linear view depth (metres-ish)
+        gl_FragColor = vec4(n * 0.5 + 0.5, vViewZ);
+      }
+    `,
+  });
+
+  const contourRT = new THREE.WebGLRenderTarget(1, 1, {
+    type: THREE.HalfFloatType,
+    format: THREE.RGBAFormat,
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    depthBuffer: true,
+    stencilBuffer: false,
+  });
+  contourRT.texture.name = "projectsContourBuffer";
+
+  const contourCompositeUniforms = {
+    tBuffer: { value: contourRT.texture },
+    uResolution: { value: new THREE.Vector2(1, 1) },
+    uPixelRatio: { value: renderer.getPixelRatio() },
+    uSilhouette: { value: DIGITAL_MATRIX_LEGACY.silhouette },
+    uInternal: { value: DIGITAL_MATRIX_LEGACY.internal },
+    uThreshold: { value: DIGITAL_MATRIX_LEGACY.edgeThreshold },
+    uStippleSpacing: { value: DIGITAL_MATRIX_LEGACY.stippleSpacing },
+    uContourCssPx: { value: DIGITAL_MATRIX_LEGACY.contourCssPx },
+    uContourColor: { value: new THREE.Color(DIGITAL_MATRIX_LEGACY.contourColor) },
+    uScreenRadius: { value: 80 },
+    uDebug: { value: 0 },
+    uGrainStyle: { value: 0 }, // 0 = Digital Matrix (legacy, untouched), 1 = Organic Distressed
+    uOrganicDistortion: { value: 0.4 },
+    uTextureBreakup: { value: 0.45 },
+    // View→Projects-local for object-anchored distress (Organic Distressed only)
+    uProjScale: { value: new THREE.Vector2(1, 1) },
+    uCamPerspective: { value: 1 },
+    uViewToLocal: { value: new THREE.Matrix4() },
+  };
+
+  const contourCompositeMaterial = new THREE.ShaderMaterial({
+    uniforms: contourCompositeUniforms,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+    blending: THREE.NormalBlending,
+    fog: false,
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = vec4(position.xy, 0.0, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform sampler2D tBuffer;
+      uniform vec2 uResolution;
+      uniform float uPixelRatio;
+      uniform float uSilhouette;
+      uniform float uInternal;
+      uniform float uThreshold;
+      uniform float uStippleSpacing;
+      uniform float uContourCssPx;
+      uniform vec3 uContourColor;
+      uniform float uScreenRadius;
+      uniform int uDebug;
+      uniform int uGrainStyle;
+      uniform float uOrganicDistortion;
+      uniform float uTextureBreakup;
+      uniform vec2 uProjScale;
+      uniform float uCamPerspective;
+      uniform mat4 uViewToLocal;
+
+      varying vec2 vUv;
+
+      vec4 fetch(vec2 uv) {
+        return texture2D(tBuffer, uv);
+      }
+
+      float objectMask(vec4 s) {
+        // Empty buffer cleared to 0; object has positive view depth
+        return step(0.02, s.a);
+      }
+
+      // Stable, non-lattice hash (not Bayer / not screen grid)
+      float hash21(vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+      }
+
+      float valueNoise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float a = hash21(i);
+        float b = hash21(i + vec2(1.0, 0.0));
+        float c = hash21(i + vec2(0.0, 1.0));
+        float d = hash21(i + vec2(1.0, 1.0));
+        return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+      }
+
+      // Reconstruct Projects-group local position from linear view depth
+      vec3 localFromDepth(vec2 uv, float depth) {
+        vec2 ndc = uv * 2.0 - 1.0;
+        vec3 viewPos;
+        if (uCamPerspective > 0.5) {
+          viewPos = vec3(
+            ndc.x * depth / max(uProjScale.x, 1e-5),
+            ndc.y * depth / max(uProjScale.y, 1e-5),
+            -depth
+          );
+        } else {
+          viewPos = vec3(
+            ndc.x / max(uProjScale.x, 1e-5),
+            ndc.y / max(uProjScale.y, 1e-5),
+            -depth
+          );
+        }
+        return (uViewToLocal * vec4(viewPos, 1.0)).xyz;
+      }
+
+      void main() {
+        vec2 texel = 1.0 / uResolution;
+        vec4 c = fetch(vUv);
+        float m = objectMask(c);
+
+        // Sobel on depth + normals
+        float d[9];
+        vec3 n[9];
+        int k = 0;
+        for (int j = -1; j <= 1; j++) {
+          for (int i = -1; i <= 1; i++) {
+            vec4 s = fetch(vUv + vec2(float(i), float(j)) * texel);
+            d[k] = s.a;
+            n[k] = s.rgb * 2.0 - 1.0;
+            k++;
+          }
+        }
+
+        float gxD = -d[0] - 2.0*d[3] - d[6] + d[2] + 2.0*d[5] + d[8];
+        float gyD = -d[0] - 2.0*d[1] - d[2] + d[6] + 2.0*d[7] + d[8];
+        float depthEdge = sqrt(gxD*gxD + gyD*gyD);
+
+        vec3 gxN = -n[0] - 2.0*n[3] - n[6] + n[2] + 2.0*n[5] + n[8];
+        vec3 gyN = -n[0] - 2.0*n[1] - n[2] + n[6] + 2.0*n[7] + n[8];
+        float normalEdge = length(gxN) + length(gyN);
+
+        // Exterior / overlap silhouettes: strong depth breaks (incl. vs empty)
+        float sil = smoothstep(uThreshold * 0.35, uThreshold * 1.8, depthEdge);
+        // Internal form: normal changes on continuous surfaces
+        float cont = objectMask(c);
+        float internal = smoothstep(uThreshold * 0.25, uThreshold * 1.2, normalEdge) * cont;
+        internal *= 1.0 - sil * 0.65;
+
+        // Distance: keep silhouette, thin internals when small on screen
+        float sizeNorm = clamp(uScreenRadius / 140.0, 0.0, 1.0);
+        float silW = uSilhouette * mix(1.05, 0.92, sizeNorm);
+        float intW = uInternal * mix(0.25, 1.0, sizeNorm);
+        float edge = clamp(sil * silW + internal * intW, 0.0, 1.0);
+
+        if (uDebug == 1) {
+          float nd = clamp(c.a / 80.0, 0.0, 1.0);
+          gl_FragColor = vec4(vec3(nd), m);
+          return;
+        }
+        if (uDebug == 2) {
+          gl_FragColor = vec4(c.rgb, m);
+          return;
+        }
+        if (uDebug == 3) {
+          gl_FragColor = vec4(vec3(edge), edge);
+          return;
+        }
+
+        vec2 pixel = vUv * uResolution;
+
+        // ─── DIGITAL MATRIX (untouched algorithm) ─────────────────────────
+        // Source of the LED/Bayer look: floor(pixel/spacing) forces every
+        // mark onto a regular screen-aligned lattice of cell centres.
+        if (uGrainStyle == 0) {
+          float spacing = max(uStippleSpacing, 1.2) * uPixelRatio;
+          vec2 cell = floor(pixel / spacing);
+          vec2 centre = (cell + 0.5) * spacing;
+          float dist = length(pixel - centre);
+          float radius = clamp(uContourCssPx, 0.5, 1.3) * uPixelRatio * 0.5;
+          float dotMask = 1.0 - smoothstep(radius * 0.75, radius * 1.15, dist);
+
+          // Edge strength sampled at the stipple centre (stable, less crawl)
+          vec2 centreUv = centre / uResolution;
+          vec4 cc = fetch(centreUv);
+          float cd[9];
+          vec3 cn[9];
+          k = 0;
+          for (int j = -1; j <= 1; j++) {
+            for (int i = -1; i <= 1; i++) {
+              vec4 s = fetch(centreUv + vec2(float(i), float(j)) * texel);
+              cd[k] = s.a;
+              cn[k] = s.rgb * 2.0 - 1.0;
+              k++;
+            }
+          }
+          float cgxD = -cd[0]-2.0*cd[3]-cd[6]+cd[2]+2.0*cd[5]+cd[8];
+          float cgyD = -cd[0]-2.0*cd[1]-cd[2]+cd[6]+2.0*cd[7]+cd[8];
+          float cDepth = sqrt(cgxD*cgxD + cgyD*cgyD);
+          vec3 cgxN = -cn[0]-2.0*cn[3]-cn[6]+cn[2]+2.0*cn[5]+cn[8];
+          vec3 cgyN = -cn[0]-2.0*cn[1]-cn[2]+cn[6]+2.0*cn[7]+cn[8];
+          float cNorm = length(cgxN) + length(cgyN);
+          float cSil = smoothstep(uThreshold * 0.35, uThreshold * 1.8, cDepth);
+          float cInt = smoothstep(uThreshold * 0.25, uThreshold * 1.2, cNorm) * objectMask(cc);
+          cInt *= 1.0 - cSil * 0.65;
+          float cEdge = clamp(cSil * silW + cInt * intW, 0.0, 1.0);
+
+          float alpha = cEdge * dotMask;
+          // Controlled brightness — not overexposed white
+          vec3 col = uContourColor * mix(0.55, 0.92, cSil * 0.65 + cInt * 0.35);
+          gl_FragColor = vec4(col, alpha * 0.92);
+          return;
+        }
+
+        // ─── ORGANIC DISTRESSED ───────────────────────────────────────────
+        // Same Digital Matrix grain, then restrained domain warp / irregular
+        // dropout / sub-pixel jitter. Not blue-noise replacement, not sparse CAD.
+        float distort = clamp(uOrganicDistortion, 0.0, 1.0);
+        float breakup = clamp(uTextureBreakup, 0.0, 1.0);
+
+        float oSpacing = max(uStippleSpacing, 1.2) * uPixelRatio;
+
+        // Object-anchored seed from depth (stable under bob / camera motion)
+        vec3 localP = localFromDepth(vUv, max(c.a, 0.02));
+        vec2 anchor = localP.xz * 0.31 + localP.xy * 0.17;
+        anchor = mix(pixel * 0.0011, anchor, m);
+
+        // Smooth low-frequency domain warp (subtle)
+        vec2 warpCoord = pixel * (0.018 / max(uPixelRatio, 1.0)) + anchor * 0.55;
+        float n1 = valueNoise(warpCoord);
+        float n2 = valueNoise(warpCoord + vec2(4.7, 1.9));
+        float n3 = valueNoise(warpCoord * 0.47 + vec2(9.1, 3.3));
+        vec2 warp = vec2(n1, n2) * 2.0 - 1.0;
+        warp += (vec2(n3, valueNoise(warpCoord.yx + 2.4)) * 2.0 - 1.0) * 0.35;
+        float warpPx = oSpacing * (0.12 + 0.28 * distort);
+        vec2 warpedPixel = pixel + warp * warpPx;
+
+        // Irregular local spacing (gentle stretch — not a new lattice)
+        float spaceVar = mix(0.94, 1.08, valueNoise(anchor * 1.7 + floor(warpedPixel * 0.07)));
+        float localSpacing = oSpacing * mix(1.0, spaceVar, distort * 0.85);
+
+        vec2 oCell = floor(warpedPixel / localSpacing);
+        vec2 oCentre = (oCell + 0.5) * localSpacing;
+
+        // Sub-pixel positional jitter ~0.3–0.7 CSS px along / across marks
+        float jitterCss = mix(0.3, 0.7, distort);
+        float jitterPxAmt = jitterCss * uPixelRatio;
+        vec2 jHash = vec2(
+          hash21(oCell + anchor * 3.1 + vec2(1.7, 4.2)),
+          hash21(oCell + anchor.yx * 2.9 + vec2(8.3, 0.6))
+        );
+        oCentre += (jHash * 2.0 - 1.0) * jitterPxAmt;
+
+        // Occasional mark sits slightly outside the perfect edge sample
+        vec2 samplePx = oCentre + (jHash.yx * 2.0 - 1.0) * (0.35 * uPixelRatio * distort);
+        vec2 oCentreUv = samplePx / uResolution;
+        vec4 oSample = fetch(oCentreUv);
+        float od[9];
+        vec3 onrm[9];
+        k = 0;
+        for (int j = -1; j <= 1; j++) {
+          for (int i = -1; i <= 1; i++) {
+            vec4 s = fetch(oCentreUv + vec2(float(i), float(j)) * texel);
+            od[k] = s.a;
+            onrm[k] = s.rgb * 2.0 - 1.0;
+            k++;
+          }
+        }
+        float ogxD = -od[0]-2.0*od[3]-od[6]+od[2]+2.0*od[5]+od[8];
+        float ogyD = -od[0]-2.0*od[1]-od[2]+od[6]+2.0*od[7]+od[8];
+        float oDepth = sqrt(ogxD*ogxD + ogyD*ogyD);
+        vec3 ogxN = -onrm[0]-2.0*onrm[3]-onrm[6]+onrm[2]+2.0*onrm[5]+onrm[8];
+        vec3 ogyN = -onrm[0]-2.0*onrm[1]-onrm[2]+onrm[6]+2.0*onrm[7]+onrm[8];
+        float oNorm = length(ogxN) + length(ogyN);
+        float oSil = smoothstep(uThreshold * 0.35, uThreshold * 1.8, oDepth);
+        float oInt = smoothstep(uThreshold * 0.25, uThreshold * 1.2, oNorm) * objectMask(oSample);
+        oInt *= 1.0 - oSil * 0.65;
+        float oEdge = clamp(oSil * silW + oInt * intW, 0.0, 1.0);
+
+        // Irregular contour dropout — unequal gap lengths, hierarchy-aware
+        float hDrop = hash21(oCell * 1.13 + floor(anchor * 4.7));
+        float hGap = hash21(oCell * 0.71 + floor(anchor * 2.3 + 11.0));
+        float gapLen = mix(0.08, 0.42, hGap);
+        float runPhase = fract(dot(oCell, vec2(0.173, 0.311)) + hash21(floor(anchor * 1.9)));
+        float inGap = step(1.0 - gapLen * breakup, runPhase);
+
+        // Retention: sil ~80–90%, major internal ~55–70%, minor ~30–50%
+        float silRetain = mix(0.82, 0.90, hash21(oCell + 2.4));
+        float majRetain = mix(0.55, 0.70, hash21(oCell + 5.1));
+        float minRetain = mix(0.30, 0.50, hash21(oCell + 7.8));
+        float retain = minRetain;
+        retain = mix(retain, majRetain, smoothstep(0.12, 0.45, oInt));
+        retain = mix(retain, silRetain, oSil);
+        float surfaceKeep = mix(0.55, 0.88, valueNoise(anchor * 2.1 + oCell * 0.05));
+        retain = mix(surfaceKeep, retain, smoothstep(0.05, 0.35, oEdge));
+        retain = mix(1.0, retain, 0.35 + 0.65 * breakup);
+
+        float keep = (1.0 - inGap * step(0.2, oEdge)) * step(hDrop, retain);
+        // Avoid long total silhouette loss
+        keep = max(keep, oSil * step(hDrop, 0.92));
+
+        // Dot size ±15%, opacity ±18%
+        float sizeVar = mix(0.85, 1.15, hash21(oCell + anchor + vec2(3.3, 1.1)));
+        float opacVar = mix(0.82, 1.18, hash21(oCell + anchor.yx + vec2(6.2, 0.4)));
+        sizeVar = mix(1.0, sizeVar, 0.55 + 0.45 * distort);
+        opacVar = mix(1.0, opacVar, 0.55 + 0.45 * breakup);
+
+        float oRadius = clamp(uContourCssPx, 0.5, 1.3) * uPixelRatio * 0.5 * sizeVar;
+        float oDist = length(pixel - oCentre);
+        float oDot = 1.0 - smoothstep(oRadius * 0.75, oRadius * 1.15, oDist);
+
+        float oAlpha = oEdge * oDot * keep * opacVar;
+        // Same ghost opacity floor as Digital Matrix (no brightness boost)
+        vec3 oCol = uContourColor * mix(0.55, 0.92, oSil * 0.65 + oInt * 0.35);
+        gl_FragColor = vec4(oCol, oAlpha * 0.92);
+      }
+    `,
+  });
+
+  const contourQuad = new THREE.Mesh(
+    new THREE.PlaneGeometry(2, 2),
+    contourCompositeMaterial
+  );
+  const contourScene = new THREE.Scene();
+  contourScene.add(contourQuad);
+  const contourCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+  const depthOnlyMaterial = new THREE.MeshBasicMaterial({
+    colorWrite: false,
+    depthWrite: true,
+    depthTest: true,
+    side: THREE.FrontSide,
+  });
+
+  function resizeContourTargets() {
+    const w = Math.max(1, Math.floor(window.innerWidth * renderer.getPixelRatio()));
+    const h = Math.max(1, Math.floor(window.innerHeight * renderer.getPixelRatio()));
+    contourRT.setSize(w, h);
+    contourCompositeUniforms.uResolution.value.set(w, h);
+    contourCompositeUniforms.uPixelRatio.value = renderer.getPixelRatio();
+  }
+  resizeContourTargets();
+
+  function enableContourLayer(root) {
+    root.traverse((obj) => {
+      obj.layers.enable(CONTOUR_LAYER);
+    });
+  }
+
+  function createSurfaceStippleMaterial(settings) {
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        uCssPx: { value: settings.surfaceCssPx },
+        uPixelRatio: { value: renderer.getPixelRatio() },
+        uColor: { value: new THREE.Color(settings.surfaceColor) },
+        uStrength: { value: settings.surfaceStrength },
+        uDensity: { value: settings.surfaceDensity },
+        uLightDir: { value: new THREE.Vector3(0.4, 0.85, 0.35).normalize() },
+        uScreenRadius: { value: 80 },
+        uGrainStyle: { value: settings.grainStyle === "digital" ? 0 : 1 },
+        uOrganicDistortion: { value: settings.organicDistortion ?? 0.4 },
+        uTextureBreakup: { value: settings.textureBreakup ?? 0.45 },
+      },
+      transparent: true,
+      depthTest: true,
+      depthWrite: false,
+      blending: THREE.NormalBlending,
+      fog: false,
+      vertexShader: /* glsl */ `
+        attribute vec3 aNormal;
+        attribute float aRank;
+
+        uniform float uCssPx;
+        uniform float uPixelRatio;
+        uniform float uStrength;
+        uniform float uDensity;
+        uniform vec3 uLightDir;
+        uniform float uScreenRadius;
+        uniform int uGrainStyle;
+        uniform float uOrganicDistortion;
+        uniform float uTextureBreakup;
+
+        varying float vAlpha;
+        varying float vShade;
+
+        float hashPos(vec3 p) {
+          return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+        }
+
+        void main() {
+          vec3 nView = normalize(normalMatrix * aNormal);
+          float facing = nView.z;
+          float front = smoothstep(-0.05, 0.35, facing);
+
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mv;
+
+          float css = clamp(uCssPx, 0.4, 0.9);
+          // Distressed: subtle ±15% size; Digital: exact size
+          float sizeVar = 1.0;
+          if (uGrainStyle == 1) {
+            float distort = clamp(uOrganicDistortion, 0.0, 1.0);
+            sizeVar = mix(0.85, 1.15, fract(aRank * 17.13 + 0.37));
+            sizeVar = mix(1.0, sizeVar, 0.55 + 0.45 * distort);
+          }
+          gl_PointSize = css * uPixelRatio * sizeVar;
+
+          float ndl = clamp(dot(nView, normalize(uLightDir)) * 0.5 + 0.5, 0.0, 1.0);
+          vShade = mix(0.35, 0.75, ndl);
+
+          float sizeNorm = clamp(uScreenRadius / 140.0, 0.0, 1.0);
+          float distSurf = mix(0.0, 1.0, smoothstep(0.15, 0.55, sizeNorm));
+          // Same density as Digital Matrix — uneven object-anchored dropout only
+          float dens = uDensity;
+          float keep = step(aRank, dens * distSurf);
+          float opacVar = 1.0;
+          if (uGrainStyle == 1) {
+            float breakup = clamp(uTextureBreakup, 0.0, 1.0);
+            float h = hashPos(position);
+            // Moderate uneven surface dropout (not global sparsity)
+            float surfaceGate = mix(0.72, 0.96, h);
+            keep *= step(mix(0.0, 0.22, breakup), surfaceGate);
+            opacVar = mix(0.82, 1.18, fract(aRank * 9.71 + 0.19));
+            opacVar = mix(1.0, opacVar, 0.55 + 0.45 * breakup);
+          }
+          vAlpha = uStrength * front * keep * 0.85 * opacVar;
+          if (vAlpha < 0.01) {
+            gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+          }
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 uColor;
+        varying float vAlpha;
+        varying float vShade;
+        void main() {
+          if (vAlpha < 0.01) discard;
+          vec2 uv = gl_PointCoord - 0.5;
+          float d = length(uv);
+          if (d > 0.5) discard;
+          float edge = 1.0 - smoothstep(0.38, 0.5, d);
+          gl_FragColor = vec4(uColor * vShade, vAlpha * edge);
+        }
+      `,
+    });
+  }
+
+  function sampleSparseSurface(poseRoot, count, seed) {
+    poseRoot.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(poseRoot.matrixWorld).invert();
+    const mat = new THREE.Matrix4();
+    const va = new THREE.Vector3();
+    const vb = new THREE.Vector3();
+    const vc = new THREE.Vector3();
+    const e1 = new THREE.Vector3();
+    const e2 = new THREE.Vector3();
+    const n = new THREE.Vector3();
+    const tris = [];
+
+    poseRoot.traverse((obj) => {
+      if (!obj.isMesh || !obj.geometry) return;
+      const geom = obj.geometry;
+      if (!geom.attributes.normal) geom.computeVertexNormals();
+      const pos = geom.attributes.position;
+      const nrm = geom.attributes.normal;
+      const index = geom.index;
+      mat.multiplyMatrices(inv, obj.matrixWorld);
+      const nMat = new THREE.Matrix3().getNormalMatrix(mat);
+      const triCount = index ? index.count / 3 : (pos.count / 3) | 0;
+      // Stride to keep analysis light
+      const stride = Math.max(1, (triCount / 120000) | 0);
+      for (let t = 0; t < triCount; t += stride) {
+        let i0;
+        let i1;
+        let i2;
+        if (index) {
+          i0 = index.getX(t * 3);
+          i1 = index.getX(t * 3 + 1);
+          i2 = index.getX(t * 3 + 2);
+        } else {
+          i0 = t * 3;
+          i1 = t * 3 + 1;
+          i2 = t * 3 + 2;
+        }
+        va.fromBufferAttribute(pos, i0).applyMatrix4(mat);
+        vb.fromBufferAttribute(pos, i1).applyMatrix4(mat);
+        vc.fromBufferAttribute(pos, i2).applyMatrix4(mat);
+        e1.subVectors(vb, va);
+        e2.subVectors(vc, va);
+        n.copy(e1).cross(e2);
+        const area = n.length() * 0.5;
+        if (!(area > 1e-12)) continue;
+        n.normalize();
+        // Prefer face normal from transformed vertex normals when available
+        const na = new THREE.Vector3()
+          .fromBufferAttribute(nrm, i0)
+          .applyMatrix3(nMat)
+          .normalize();
+        const nb = new THREE.Vector3()
+          .fromBufferAttribute(nrm, i1)
+          .applyMatrix3(nMat)
+          .normalize();
+        const nc = new THREE.Vector3()
+          .fromBufferAttribute(nrm, i2)
+          .applyMatrix3(nMat)
+          .normalize();
+        const nn = na.add(nb).add(nc).normalize();
+        tris.push({
+          ax: va.x,
+          ay: va.y,
+          az: va.z,
+          bx: vb.x,
+          by: vb.y,
+          bz: vb.z,
+          cx: vc.x,
+          cy: vc.y,
+          cz: vc.z,
+          nx: nn.x,
+          ny: nn.y,
+          nz: nn.z,
+          area,
+        });
+      }
+    });
+
+    const posArr = new Float32Array(count * 3);
+    const nrmArr = new Float32Array(count * 3);
+    const rankArr = new Float32Array(count);
+    if (!tris.length) return { posArr, nrmArr, rankArr, count: 0 };
+
+    const cdf = new Float32Array(tris.length);
+    let total = 0;
+    for (let i = 0; i < tris.length; i++) {
+      total += tris[i].area;
+      cdf[i] = total;
+    }
+    const rnd = seededUnitRandom(seed);
+    const pick = (r) => {
+      const target = r * total;
+      let lo = 0;
+      let hi = cdf.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (cdf[mid] < target) lo = mid + 1;
+        else hi = mid;
+      }
+      return tris[lo];
+    };
+    for (let i = 0; i < count; i++) {
+      const tri = pick(rnd());
+      let u = rnd();
+      let v = rnd();
+      if (u + v > 1) {
+        u = 1 - u;
+        v = 1 - v;
+      }
+      const w = 1 - u - v;
+      const o = i * 3;
+      posArr[o] = tri.ax * w + tri.bx * u + tri.cx * v;
+      posArr[o + 1] = tri.ay * w + tri.by * u + tri.cy * v;
+      posArr[o + 2] = tri.az * w + tri.bz * u + tri.cz * v;
+      nrmArr[o] = tri.nx;
+      nrmArr[o + 1] = tri.ny;
+      nrmArr[o + 2] = tri.nz;
+      rankArr[i] = rnd();
+    }
+    return { posArr, nrmArr, rankArr, count };
+  }
+
+  function estimateProjectsScreenRadius(state, cam) {
+    if (!state?.contourLocalCenter) return 80;
+    state.group.updateWorldMatrix(true, false);
+    const center = state.contourLocalCenter
+      .clone()
+      .applyMatrix4(state.group.matrixWorld);
+    const radius = state.contourLocalRadius * Math.abs(state.scale);
+    const h = Math.max(window.innerHeight, 1);
+    if (cam.isPerspectiveCamera) {
+      const dist = Math.max(cam.position.distanceTo(center), 0.05);
+      const vFov = (cam.fov * Math.PI) / 180;
+      const worldH = 2 * Math.tan(vFov * 0.5) * dist;
+      return (radius / worldH) * h;
+    }
+    const halfH = Math.max((cam.top - cam.bottom) * 0.5, 1e-4);
+    return (radius / halfH) * (h * 0.5);
+  }
+
+  function applyContourDisplayMode(state) {
+    if (!state?.solidModel) return;
+    const contour = state.contourSettings?.mode === "contour";
+    const debug = state.contourSettings?.debug || "final";
+
+    // Restore or apply depth-only materials
+    state.solidMeshes.forEach((entry) => {
+      if (contour) {
+        entry.mesh.material = depthOnlyMaterial;
+        entry.mesh.visible = true;
+      } else {
+        entry.mesh.material = entry.originalMaterial;
+        entry.mesh.visible = true;
+      }
+    });
+
+    if (state.surfacePoints) {
+      state.surfacePoints.visible = contour && debug === "final";
+    }
+  }
+
+  function syncContourUniforms(state) {
+    const s = state.contourSettings;
+    if (!s) return;
+    contourCompositeUniforms.uSilhouette.value = s.silhouette;
+    contourCompositeUniforms.uInternal.value = s.internal;
+    contourCompositeUniforms.uThreshold.value = s.edgeThreshold;
+    contourCompositeUniforms.uStippleSpacing.value = s.stippleSpacing;
+    contourCompositeUniforms.uContourCssPx.value = s.contourCssPx;
+    contourCompositeUniforms.uContourColor.value.set(s.contourColor);
+    contourCompositeUniforms.uGrainStyle.value = s.grainStyle === "digital" ? 0 : 1;
+    contourCompositeUniforms.uOrganicDistortion.value = s.organicDistortion ?? 0.4;
+    contourCompositeUniforms.uTextureBreakup.value = s.textureBreakup ?? 0.45;
+    const debugMap = { final: 0, depth: 1, normals: 2, edges: 3 };
+    contourCompositeUniforms.uDebug.value = debugMap[s.debug] ?? 0;
+
+    if (state.surfaceMaterial) {
+      state.surfaceMaterial.uniforms.uCssPx.value = s.surfaceCssPx;
+      state.surfaceMaterial.uniforms.uStrength.value = s.surfaceStrength;
+      state.surfaceMaterial.uniforms.uDensity.value = s.surfaceDensity;
+      state.surfaceMaterial.uniforms.uColor.value.set(s.surfaceColor);
+      state.surfaceMaterial.uniforms.uGrainStyle.value =
+        s.grainStyle === "digital" ? 0 : 1;
+      state.surfaceMaterial.uniforms.uOrganicDistortion.value =
+        s.organicDistortion ?? 0.4;
+      state.surfaceMaterial.uniforms.uTextureBreakup.value =
+        s.textureBreakup ?? 0.45;
+    }
+
+    const organicControls = document.getElementById("proj-organic-controls");
+    if (organicControls) {
+      organicControls.hidden = s.grainStyle !== "distressed";
+    }
+  }
+
+  function attachContourStipple(state, solidModel) {
+    const settings = loadContourSettings();
+    state.contourSettings = settings;
+    state.solidModel = solidModel;
+
+    // Ensure normals exist for capture + surface shading
+    solidModel.traverse((obj) => {
+      if (obj.isMesh && obj.geometry) {
+        if (!obj.geometry.attributes.normal) {
+          obj.geometry.computeVertexNormals();
+        }
+      }
+    });
+
+    enableContourLayer(state.group);
+
+    state.solidMeshes = [];
+    solidModel.traverse((obj) => {
+      if (!obj.isMesh) return;
+      state.solidMeshes.push({
+        mesh: obj,
+        originalMaterial: obj.material,
+      });
+    });
+
+    // Sparse surface stipple under pose (inherits transform once)
+    const sampled = sampleSparseSurface(
+      state.pose,
+      CONTOUR_SURFACE_COUNT,
+      CONTOUR_SURFACE_SEED
+    );
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(sampled.posArr, 3));
+    geom.setAttribute("aNormal", new THREE.BufferAttribute(sampled.nrmArr, 3));
+    geom.setAttribute("aRank", new THREE.BufferAttribute(sampled.rankArr, 1));
+    geom.computeBoundingSphere();
+
+    const surfaceMat = createSurfaceStippleMaterial(settings);
+    const surfacePoints = new THREE.Points(geom, surfaceMat);
+    surfacePoints.name = "projectsContourSurface";
+    surfacePoints.frustumCulled = true;
+    surfacePoints.layers.disable(CONTOUR_LAYER); // beauty only
+    state.pose.add(surfacePoints);
+    state.surfacePoints = surfacePoints;
+    state.surfaceMaterial = surfaceMat;
+
+    const sphere = geom.boundingSphere.clone();
+    state.contourLocalCenter = sphere.center.clone();
+    state.contourLocalRadius = Math.max(sphere.radius, 0.05);
+
+    applyContourDisplayMode(state);
+    syncContourUniforms(state);
+    console.log(
+      `[projects contour] surface dots=${sampled.count}, solid meshes=${state.solidMeshes.length}`
+    );
+  }
+
+  const contourInvGroup = new THREE.Matrix4();
+
+  function renderProjectsContourPass(state) {
+    if (!state || state.contourSettings?.mode !== "contour") return false;
+
+    const screenR = estimateProjectsScreenRadius(state, activeCamera);
+    contourCompositeUniforms.uScreenRadius.value = screenR;
+    if (state.surfaceMaterial) {
+      state.surfaceMaterial.uniforms.uScreenRadius.value = screenR;
+    }
+
+    // Object-anchored distress: view → Projects group local
+    const proj = activeCamera.projectionMatrix.elements;
+    contourCompositeUniforms.uProjScale.value.set(proj[0], proj[5]);
+    contourCompositeUniforms.uCamPerspective.value = activeCamera.isPerspectiveCamera
+      ? 1
+      : 0;
+    state.group.updateWorldMatrix(true, false);
+    activeCamera.updateMatrixWorld(true);
+    contourInvGroup.copy(state.group.matrixWorld).invert();
+    contourCompositeUniforms.uViewToLocal.value
+      .copy(contourInvGroup)
+      .multiply(activeCamera.matrixWorld);
+
+    // Capture Projects-only depth/normals
+    const prevMask = activeCamera.layers.mask;
+    activeCamera.layers.set(CONTOUR_LAYER);
+    const prevOverride = scene.overrideMaterial;
+    scene.overrideMaterial = contourCaptureMaterial;
+
+    renderer.setRenderTarget(contourRT);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear(true, true, true);
+    renderer.render(scene, activeCamera);
+
+    scene.overrideMaterial = prevOverride;
+    activeCamera.layers.mask = prevMask;
+    renderer.setRenderTarget(null);
+    renderer.setClearColor(0x000000, 1);
+    return true;
+  }
+
+  function renderContourComposite() {
+    renderer.render(contourScene, contourCam);
+  }
+
+  // ─── Floating models: load, centre, buoyant update ───────────────────
   // ─── Floating models: load, centre, buoyant update ───────────────────
   const gltfLoader = new GLTFLoader();
   const floatingModels = [];
@@ -717,14 +1644,21 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         const center = box.getCenter(new THREE.Vector3());
         model.position.sub(center);
         pose.add(model);
+        state.solidModel = model;
 
-        // Vertical half-extent AFTER base pose, in local units (ignore group scale)
+        // Vertical half-extent AFTER base pose, in local units (ignore group scale).
+        // Measured on the solid pose only — before contour stipple is attached.
         const prevScale = state.scale;
         group.scale.setScalar(1);
         group.updateMatrixWorld(true);
         const posedBox = new THREE.Box3().setFromObject(pose);
         state.halfHeight = Math.max(0.05, (posedBox.max.y - posedBox.min.y) * 0.5);
         group.scale.setScalar(prevScale);
+
+        if (config.attachContourStipple) {
+          attachContourStipple(state, model);
+        }
+
         state.ready = true;
 
         const t0 = uniforms.uTime.value;
@@ -764,6 +1698,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     rotXDeg: activeComposition.projects.rotXDeg,
     rotYDeg: activeComposition.projects.rotYDeg,
     rotZDeg: activeComposition.projects.rotZDeg,
+    attachContourStipple: true,
     baseRotation: {
       x: (activeComposition.projects.rotXDeg * Math.PI) / 180,
       y: (activeComposition.projects.rotYDeg * Math.PI) / 180,
@@ -1086,6 +2021,143 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         applyCompositionPreset(cloneComposition(FINAL_COMPOSITION));
       });
     }
+
+    setupContourStippleControls();
+  }
+
+  function setupContourStippleControls() {
+    const projectsState = () => floatingModels.find((s) => s.id === "projects");
+
+    const applyAppearance = (settings) => {
+      const state = projectsState();
+      if (!state) return;
+      state.contourSettings = settings;
+      syncContourUniforms(state);
+      applyContourDisplayMode(state);
+    };
+
+    const syncMode = (mode) => {
+      document.querySelectorAll("[data-proj-contour-mode]").forEach((btn) => {
+        btn.classList.toggle("is-active", btn.dataset.projContourMode === mode);
+      });
+    };
+
+    const syncGrain = (grainStyle) => {
+      document.querySelectorAll("[data-proj-grain-style]").forEach((btn) => {
+        btn.classList.toggle("is-active", btn.dataset.projGrainStyle === grainStyle);
+      });
+    };
+
+    const syncDebug = (debug) => {
+      document.querySelectorAll("[data-proj-contour-debug]").forEach((btn) => {
+        btn.classList.toggle("is-active", btn.dataset.projContourDebug === debug);
+      });
+    };
+
+    const settings = loadContourSettings();
+    const map = [
+      ["tune-proj-contour-sil", "tune-proj-contour-sil-val", "silhouette", 0, 1, 2],
+      ["tune-proj-contour-int", "tune-proj-contour-int-val", "internal", 0, 1, 2],
+      ["tune-proj-contour-thresh", "tune-proj-contour-thresh-val", "edgeThreshold", 0.05, 1.5, 2],
+      ["tune-proj-contour-space", "tune-proj-contour-space-val", "stippleSpacing", 1.2, 5, 1],
+      ["tune-proj-contour-csize", "tune-proj-contour-csize-val", "contourCssPx", 0.5, 1.3, 1],
+      ["tune-proj-contour-sstr", "tune-proj-contour-sstr-val", "surfaceStrength", 0, 0.6, 2],
+      ["tune-proj-contour-ssize", "tune-proj-contour-ssize-val", "surfaceCssPx", 0.4, 0.9, 2],
+      ["tune-proj-contour-sdens", "tune-proj-contour-sdens-val", "surfaceDensity", 0.15, 1, 2],
+      ["tune-proj-organic-distort", "tune-proj-organic-distort-val", "organicDistortion", 0, 1, 2],
+      ["tune-proj-texture-breakup", "tune-proj-texture-breakup-val", "textureBreakup", 0, 1, 2],
+    ];
+
+    map.forEach(([id, outId, key, min, max, digits]) => {
+      const el = document.getElementById(id);
+      const out = document.getElementById(outId);
+      if (!el) return;
+      el.value = String(settings[key]);
+      if (out) out.textContent = Number(settings[key]).toFixed(digits);
+      el.addEventListener("input", () => {
+        const value = THREE.MathUtils.clamp(parseFloat(el.value) || min, min, max);
+        if (out) out.textContent = value.toFixed(digits);
+        const next = { ...loadContourSettings(), [key]: value };
+        saveContourSettings(next);
+        applyAppearance(next);
+      });
+    });
+
+    const cColor = document.getElementById("tune-proj-contour-ccolor");
+    const sColor = document.getElementById("tune-proj-contour-scolor");
+    if (cColor) {
+      cColor.value = settings.contourColor;
+      cColor.addEventListener("input", () => {
+        const next = { ...loadContourSettings(), contourColor: cColor.value };
+        saveContourSettings(next);
+        applyAppearance(next);
+      });
+    }
+    if (sColor) {
+      sColor.value = settings.surfaceColor;
+      sColor.addEventListener("input", () => {
+        const next = { ...loadContourSettings(), surfaceColor: sColor.value };
+        saveContourSettings(next);
+        applyAppearance(next);
+      });
+    }
+
+    syncMode(settings.mode);
+    syncGrain(settings.grainStyle);
+    syncDebug(settings.debug);
+    applyAppearance(settings);
+
+    document.querySelectorAll("[data-proj-contour-mode]").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const mode = btn.dataset.projContourMode === "solid" ? "solid" : "contour";
+        const next = { ...loadContourSettings(), mode };
+        saveContourSettings(next);
+        syncMode(mode);
+        applyAppearance(next);
+      });
+    });
+
+    document.querySelectorAll("[data-proj-grain-style]").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const grainStyle =
+          btn.dataset.projGrainStyle === "distressed" ? "distressed" : "digital";
+        let next = { ...loadContourSettings(), grainStyle };
+        // Switching to Digital Matrix always restores the immutable legacy look
+        if (grainStyle === "digital") next = applyDigitalMatrixLegacy(next);
+        saveContourSettings(next);
+        syncGrain(grainStyle);
+        // Refresh shared sliders to legacy values when returning to Digital
+        if (grainStyle === "digital") {
+          map.forEach(([id, outId, key, , , digits]) => {
+            if (key === "organicDistortion" || key === "textureBreakup") return;
+            const el = document.getElementById(id);
+            const out = document.getElementById(outId);
+            if (!el || next[key] == null) return;
+            el.value = String(next[key]);
+            if (out) out.textContent = Number(next[key]).toFixed(digits);
+          });
+          if (cColor) cColor.value = next.contourColor;
+          if (sColor) sColor.value = next.surfaceColor;
+        }
+        applyAppearance(next);
+      });
+    });
+
+    document.querySelectorAll("[data-proj-contour-debug]").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const debug = btn.dataset.projContourDebug || "final";
+        const next = { ...loadContourSettings(), debug };
+        saveContourSettings(next);
+        syncDebug(debug);
+        applyAppearance(next);
+      });
+    });
   }
 
   setupFloatTuneDock();
@@ -1512,6 +2584,12 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     renderer.setSize(w, h);
     uniforms.uPixelRatio.value = Math.min(window.devicePixelRatio, 2);
     renderer.setPixelRatio(uniforms.uPixelRatio.value);
+    floatingModels.forEach((state) => {
+      if (state.surfaceMaterial?.uniforms?.uPixelRatio) {
+        state.surfaceMaterial.uniforms.uPixelRatio.value = uniforms.uPixelRatio.value;
+      }
+    });
+    resizeContourTargets();
   }
   window.addEventListener("resize", onResize);
 
@@ -1536,7 +2614,20 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       updateCompositionLabels();
     }
 
+    const projects = floatingModels.find((s) => s.id === "projects");
+    const contourOn =
+      projects &&
+      projects.contourSettings?.mode === "contour" &&
+      renderProjectsContourPass(projects);
+
+    renderer.autoClear = true;
     renderer.render(scene, activeCamera);
+
+    if (contourOn) {
+      renderer.autoClear = false;
+      renderContourComposite();
+      renderer.autoClear = true;
+    }
   }
 
   animate();
