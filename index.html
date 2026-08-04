@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stippled Ocean</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <canvas id="ocean"></canvas>
+  <div class="hint">Click to focus · Drag to splash · Double-click for a burst · Two-finger drag to pan · Pinch to zoom</div>
+
+  <!-- TEMP: composition labels + axes (Top view only) — easy to remove later -->
+  <div id="comp-labels" class="comp-labels is-hidden" aria-hidden="true">
+    <div class="comp-label" data-model="projects">PROJECTS</div>
+    <div class="comp-label" data-model="about">ABOUT</div>
+    <div class="comp-label" data-model="interests">INTERESTS</div>
+  </div>
+  <div id="comp-axes" class="comp-axes is-hidden" aria-hidden="true">
+    <div class="comp-axes__x">+X</div>
+    <div class="comp-axes__z">+Z</div>
+    <div class="comp-axes__cross"></div>
+  </div>
+
+  <!-- TEMP: show/hide + view switcher + 3-column float tune dock -->
+  <button type="button" id="float-tune-toggle" class="float-tune-toggle" aria-pressed="false">Hide Tune</button>
+
+  <div class="float-tune-chrome">
+    <div class="view-bar" id="view-bar" aria-label="Camera view">
+      <div class="view-bar__group">
+        <span class="view-bar__label">View</span>
+        <button type="button" class="view-btn is-active" data-view="perspective" id="view-perspective">Perspective</button>
+        <button type="button" class="view-btn" data-view="top" id="view-top">Top</button>
+      </div>
+      <div class="view-bar__group view-bar__top-tools" id="view-top-tools">
+        <button type="button" id="view-fit-all" class="view-tool-btn">Fit All</button>
+        <label class="view-zoom">
+          <span>Top Zoom</span>
+          <input id="view-top-zoom" type="range" min="0" max="100" step="1" value="45" />
+          <output id="view-top-zoom-val">45</output>
+        </label>
+        <button type="button" id="view-reset-top" class="view-tool-btn">Reset Top View</button>
+      </div>
+    </div>
+
+    <div id="float-tune-dock" class="float-tune-dock" aria-label="Float composition tuning">
+      <button type="button" class="float-tune-restore" id="tune-restore-composition">Restore Composition</button>
+
+      <section class="float-tune-col" data-model="projects">
+        <h2 class="float-tune-col__title">Projects</h2>
+        <label class="float-tune-row"><span>X</span><output id="tune-projects-x-val">-35.00</output><input id="tune-projects-x" type="range" min="-50" max="50" step="0.1" /></label>
+        <label class="float-tune-row"><span>Z</span><output id="tune-projects-z-val">-100.00</output><input id="tune-projects-z" type="range" min="-160" max="80" step="0.1" /></label>
+        <label class="float-tune-row"><span>Scale</span><output id="tune-projects-scale-val">11.63</output><input id="tune-projects-scale" type="range" min="0.1" max="24" step="0.05" /></label>
+        <label class="float-tune-row"><span>Immersion</span><output id="tune-projects-immersion-val">0.30</output><input id="tune-projects-immersion" type="range" min="0.05" max="0.55" step="0.01" /></label>
+        <label class="float-tune-row"><span>Bob</span><output id="tune-projects-bob-val">6.00</output><input id="tune-projects-bob" type="range" min="0.2" max="6" step="0.05" /></label>
+        <label class="float-tune-row"><span>Max tilt°</span><output id="tune-projects-tilt-val">6.0</output><input id="tune-projects-tilt" type="range" min="0" max="15" step="0.5" /></label>
+        <label class="float-tune-row"><span>Rotate X°</span><output id="tune-projects-rot-x-val">1</output><input id="tune-projects-rot-x" type="range" min="-180" max="180" step="1" /></label>
+        <label class="float-tune-row"><span>Rotate Y°</span><output id="tune-projects-rot-y-val">-65</output><input id="tune-projects-rot-y" type="range" min="-180" max="180" step="1" /></label>
+        <label class="float-tune-row"><span>Rotate Z°</span><output id="tune-projects-rot-z-val">5</output><input id="tune-projects-rot-z" type="range" min="-180" max="180" step="1" /></label>
+        <button type="button" class="float-tune-reset" id="tune-projects-rot-reset">Reset rotation</button>
+      </section>
+
+      <section class="float-tune-col" data-model="about">
+        <h2 class="float-tune-col__title">About</h2>
+        <label class="float-tune-row"><span>X</span><output id="tune-about-x-val">2.70</output><input id="tune-about-x" type="range" min="-50" max="50" step="0.1" /></label>
+        <label class="float-tune-row"><span>Z</span><output id="tune-about-z-val">-91.30</output><input id="tune-about-z" type="range" min="-160" max="80" step="0.1" /></label>
+        <label class="float-tune-row"><span>Scale</span><output id="tune-about-scale-val">15.60</output><input id="tune-about-scale" type="range" min="0.1" max="24" step="0.05" /></label>
+        <label class="float-tune-row"><span>Immersion</span><output id="tune-about-immersion-val">0.50</output><input id="tune-about-immersion" type="range" min="0.05" max="0.55" step="0.01" /></label>
+        <label class="float-tune-row"><span>Bob</span><output id="tune-about-bob-val">4.75</output><input id="tune-about-bob" type="range" min="0.2" max="6" step="0.05" /></label>
+        <label class="float-tune-row"><span>Max tilt°</span><output id="tune-about-tilt-val">5.0</output><input id="tune-about-tilt" type="range" min="0" max="15" step="0.5" /></label>
+        <label class="float-tune-row"><span>Rotate X°</span><output id="tune-about-rot-x-val">-71</output><input id="tune-about-rot-x" type="range" min="-180" max="180" step="1" /></label>
+        <label class="float-tune-row"><span>Rotate Y°</span><output id="tune-about-rot-y-val">0</output><input id="tune-about-rot-y" type="range" min="-180" max="180" step="1" /></label>
+        <label class="float-tune-row"><span>Rotate Z°</span><output id="tune-about-rot-z-val">6</output><input id="tune-about-rot-z" type="range" min="-180" max="180" step="1" /></label>
+        <button type="button" class="float-tune-reset" id="tune-about-rot-reset">Reset rotation</button>
+      </section>
+
+      <section class="float-tune-col" data-model="interests">
+        <h2 class="float-tune-col__title">Interests</h2>
+        <label class="float-tune-row"><span>X</span><output id="tune-interests-x-val">46.00</output><input id="tune-interests-x" type="range" min="-50" max="50" step="0.1" /></label>
+        <label class="float-tune-row"><span>Z</span><output id="tune-interests-z-val">-92.00</output><input id="tune-interests-z" type="range" min="-160" max="80" step="0.1" /></label>
+        <label class="float-tune-row"><span>Scale</span><output id="tune-interests-scale-val">12.81</output><input id="tune-interests-scale" type="range" min="0.1" max="24" step="0.05" /></label>
+        <label class="float-tune-row"><span>Immersion</span><output id="tune-interests-immersion-val">0.12</output><input id="tune-interests-immersion" type="range" min="0.05" max="0.55" step="0.01" /></label>
+        <label class="float-tune-row"><span>Bob</span><output id="tune-interests-bob-val">6.00</output><input id="tune-interests-bob" type="range" min="0.2" max="6" step="0.05" /></label>
+        <label class="float-tune-row"><span>Max tilt°</span><output id="tune-interests-tilt-val">4.0</output><input id="tune-interests-tilt" type="range" min="0" max="15" step="0.5" /></label>
+        <label class="float-tune-row"><span>Rotate X°</span><output id="tune-interests-rot-x-val">-5</output><input id="tune-interests-rot-x" type="range" min="-180" max="180" step="1" /></label>
+        <label class="float-tune-row"><span>Rotate Y°</span><output id="tune-interests-rot-y-val">-84</output><input id="tune-interests-rot-y" type="range" min="-180" max="180" step="1" /></label>
+        <label class="float-tune-row"><span>Rotate Z°</span><output id="tune-interests-rot-z-val">-7</output><input id="tune-interests-rot-z" type="range" min="-180" max="180" step="1" /></label>
+        <button type="button" class="float-tune-reset" id="tune-interests-rot-reset">Reset rotation</button>
+      </section>
+    </div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="script.js"></script>
+</body>
+</html>
