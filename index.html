@@ -59,12 +59,12 @@
         <label class="float-tune-row"><span>Rotate Z°</span><output id="tune-projects-rot-z-val">5</output><input id="tune-projects-rot-z" type="range" min="-180" max="180" step="1" /></label>
         <button type="button" class="float-tune-reset" id="tune-projects-rot-reset">Reset rotation</button>
 
-        <div class="float-tune-stipple" aria-label="Projects contour stipple test">
-          <h3 class="float-tune-stipple__title">Contour Stipple Test</h3>
+        <div class="float-tune-stipple" aria-label="Shared contour stipple display">
+          <h3 class="float-tune-stipple__title">Contour Stipple</h3>
           <div class="float-tune-mode">
             <span>Display</span>
-            <button type="button" class="view-btn" data-proj-contour-mode="solid">Solid</button>
-            <button type="button" class="view-btn is-active" data-proj-contour-mode="contour">Contour Stipple</button>
+            <button type="button" class="view-btn" data-contour-mode="solid">Solid</button>
+            <button type="button" class="view-btn is-active" data-contour-mode="contour">Contour Stipple</button>
           </div>
           <label class="float-tune-row"><span>Silhouette</span><output id="tune-proj-contour-sil-val">0.90</output><input id="tune-proj-contour-sil" type="range" min="0" max="1" step="0.01" value="0.90" /></label>
           <label class="float-tune-row"><span>Internal edges</span><output id="tune-proj-contour-int-val">0.55</output><input id="tune-proj-contour-int" type="range" min="0" max="1" step="0.01" value="0.55" /></label>
@@ -78,10 +78,10 @@
           <label class="float-tune-row float-tune-row--color"><span>Surface colour</span><input id="tune-proj-contour-scolor" type="color" value="#d8d2c8" /></label>
           <div class="float-tune-mode float-tune-mode--wrap">
             <span>Debug</span>
-            <button type="button" class="view-btn is-active" data-proj-contour-debug="final">Final</button>
-            <button type="button" class="view-btn" data-proj-contour-debug="depth">Depth</button>
-            <button type="button" class="view-btn" data-proj-contour-debug="normals">Normals</button>
-            <button type="button" class="view-btn" data-proj-contour-debug="edges">Raw edges</button>
+            <button type="button" class="view-btn is-active" data-contour-debug="final">Final</button>
+            <button type="button" class="view-btn" data-contour-debug="depth">Depth</button>
+            <button type="button" class="view-btn" data-contour-debug="normals">Normals</button>
+            <button type="button" class="view-btn" data-contour-debug="edges">Raw edges</button>
           </div>
         </div>
       </section>

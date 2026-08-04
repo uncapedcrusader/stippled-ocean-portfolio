@@ -646,20 +646,21 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   keyLight.position.set(6, 12, 8);
   scene.add(keyLight);
 
-  // ─── Projects contour stipple (appearance only; composition untouched) ──
-  // Why adaptive Points / EdgesGeometry failed the reference:
-  // Outer silhouettes are camera-dependent screen-space depth discontinuities,
-  // not fixed mesh creases. Uniform surface points fill the projection into an
-  // orb and cannot express a contour-led engraving hierarchy.
-  //
+  // ─── Shared contour stipple (appearance only; composition untouched) ──
   // Hybrid layers: (A) screen-space depth/normal contours → stippled
   //                (B) sparse dim surface dots
   //                (C) invisible mesh depth for occlusion
+  // Same shaders / RT / settings for Projects, About and Interests.
 
   const CONTOUR_LAYER = 1;
   const CONTOUR_STORAGE_KEY = "stippled-ocean-proj-contour-stipple-v1";
-  const CONTOUR_SURFACE_SEED = 0xc07a01;
   const CONTOUR_SURFACE_COUNT = 5500;
+  // Per-model surface seeds (Projects keeps the accepted grain sample set)
+  const CONTOUR_SURFACE_SEEDS = {
+    projects: 0xc07a01,
+    about: 0xc07a02,
+    interests: 0xc07a03,
+  };
 
   [
     "stippled-ocean-proj-stipple-proto-v1",
@@ -680,6 +681,16 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     surfaceColor: "#d8d2c8",
     debug: "final", // final | depth | normals | edges
   };
+
+  let sharedContourSettings = null;
+  const contourModels = []; // floating-model states with contour attached
+
+  function getSharedContourSettings() {
+    if (!sharedContourSettings) {
+      sharedContourSettings = loadContourSettings();
+    }
+    return sharedContourSettings;
+  }
 
   function loadContourSettings() {
     try {
@@ -751,7 +762,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     };
   }
 
-  // Projects-only capture: view-space normal (rgb) + camera depth (a)
+  // Contour capture: view-space normal (rgb) + camera depth (a) — all contour models
   const contourCaptureMaterial = new THREE.ShaderMaterial({
     uniforms: {},
     side: THREE.FrontSide,
@@ -1177,11 +1188,11 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   }
 
   function applyContourDisplayMode(state) {
-    if (!state?.solidModel) return;
-    const contour = state.contourSettings?.mode === "contour";
-    const debug = state.contourSettings?.debug || "final";
+    if (!state?.solidMeshes) return;
+    const s = getSharedContourSettings();
+    const contour = s.mode === "contour";
+    const debug = s.debug || "final";
 
-    // Restore or apply depth-only materials
     state.solidMeshes.forEach((entry) => {
       if (contour) {
         entry.mesh.material = depthOnlyMaterial;
@@ -1197,9 +1208,12 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     }
   }
 
+  function applyContourDisplayModeAll() {
+    contourModels.forEach(applyContourDisplayMode);
+  }
+
   function syncContourUniforms(state) {
-    const s = state.contourSettings;
-    if (!s) return;
+    const s = getSharedContourSettings();
     contourCompositeUniforms.uSilhouette.value = s.silhouette;
     contourCompositeUniforms.uInternal.value = s.internal;
     contourCompositeUniforms.uThreshold.value = s.edgeThreshold;
@@ -1209,7 +1223,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     const debugMap = { final: 0, depth: 1, normals: 2, edges: 3 };
     contourCompositeUniforms.uDebug.value = debugMap[s.debug] ?? 0;
 
-    if (state.surfaceMaterial) {
+    if (state?.surfaceMaterial) {
       state.surfaceMaterial.uniforms.uCssPx.value = s.surfaceCssPx;
       state.surfaceMaterial.uniforms.uStrength.value = s.surfaceStrength;
       state.surfaceMaterial.uniforms.uDensity.value = s.surfaceDensity;
@@ -1217,12 +1231,19 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     }
   }
 
+  function syncContourUniformsAll() {
+    syncContourUniforms(null);
+    contourModels.forEach((state) => {
+      if (state.surfaceMaterial) syncContourUniforms(state);
+    });
+  }
+
   function attachContourStipple(state, solidModel) {
-    const settings = loadContourSettings();
+    const settings = getSharedContourSettings();
     state.contourSettings = settings;
     state.solidModel = solidModel;
+    state.hasContourStipple = true;
 
-    // Ensure normals exist for capture + surface shading
     solidModel.traverse((obj) => {
       if (obj.isMesh && obj.geometry) {
         if (!obj.geometry.attributes.normal) {
@@ -1242,11 +1263,12 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       });
     });
 
-    // Sparse surface stipple under pose (inherits transform once)
+    const seed =
+      CONTOUR_SURFACE_SEEDS[state.id] ?? CONTOUR_SURFACE_SEEDS.projects;
     const sampled = sampleSparseSurface(
       state.pose,
       CONTOUR_SURFACE_COUNT,
-      CONTOUR_SURFACE_SEED
+      seed
     );
     const geom = new THREE.BufferGeometry();
     geom.setAttribute("position", new THREE.BufferAttribute(sampled.posArr, 3));
@@ -1256,9 +1278,9 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
     const surfaceMat = createSurfaceStippleMaterial(settings);
     const surfacePoints = new THREE.Points(geom, surfaceMat);
-    surfacePoints.name = "projectsContourSurface";
+    surfacePoints.name = `${state.id}ContourSurface`;
     surfacePoints.frustumCulled = true;
-    surfacePoints.layers.disable(CONTOUR_LAYER); // beauty only
+    surfacePoints.layers.disable(CONTOUR_LAYER);
     state.pose.add(surfacePoints);
     state.surfacePoints = surfacePoints;
     state.surfaceMaterial = surfaceMat;
@@ -1267,23 +1289,31 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     state.contourLocalCenter = sphere.center.clone();
     state.contourLocalRadius = Math.max(sphere.radius, 0.05);
 
+    if (!contourModels.includes(state)) contourModels.push(state);
+
     applyContourDisplayMode(state);
     syncContourUniforms(state);
     console.log(
-      `[projects contour] surface dots=${sampled.count}, solid meshes=${state.solidMeshes.length}`
+      `[${state.id} contour] surface dots=${sampled.count}, solid meshes=${state.solidMeshes.length}`
     );
   }
 
-  function renderProjectsContourPass(state) {
-    if (!state || state.contourSettings?.mode !== "contour") return false;
+  function renderContourPass() {
+    const settings = getSharedContourSettings();
+    if (settings.mode !== "contour" || !contourModels.length) return false;
 
-    const screenR = estimateProjectsScreenRadius(state, activeCamera);
-    contourCompositeUniforms.uScreenRadius.value = screenR;
-    if (state.surfaceMaterial) {
-      state.surfaceMaterial.uniforms.uScreenRadius.value = screenR;
-    }
+    let maxScreenR = 0;
+    contourModels.forEach((state) => {
+      const screenR = estimateProjectsScreenRadius(state, activeCamera);
+      maxScreenR = Math.max(maxScreenR, screenR);
+      if (state.surfaceMaterial) {
+        state.surfaceMaterial.uniforms.uScreenRadius.value = screenR;
+      }
+    });
+    // Composite distance falloff: use the largest on-screen model so Projects
+    // (and peers at similar depth) keep the accepted silhouette behaviour.
+    contourCompositeUniforms.uScreenRadius.value = maxScreenR;
 
-    // Capture Projects-only depth/normals
     const prevMask = activeCamera.layers.mask;
     activeCamera.layers.set(CONTOUR_LAYER);
     const prevOverride = scene.overrideMaterial;
@@ -1305,7 +1335,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     renderer.render(contourScene, contourCam);
   }
 
-  // ─── Floating models: load, centre, buoyant update ───────────────────
   // ─── Floating models: load, centre, buoyant update ───────────────────
   const gltfLoader = new GLTFLoader();
   const floatingModels = [];
@@ -1388,7 +1417,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         state.halfHeight = Math.max(0.05, (posedBox.max.y - posedBox.min.y) * 0.5);
         group.scale.setScalar(prevScale);
 
-        if (config.attachContourStipple) {
+    if (config.attachContourStipple) {
           attachContourStipple(state, model);
         }
 
@@ -1453,6 +1482,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     rotXDeg: activeComposition.about.rotXDeg,
     rotYDeg: activeComposition.about.rotYDeg,
     rotZDeg: activeComposition.about.rotZDeg,
+    attachContourStipple: true,
     baseRotation: {
       x: (activeComposition.about.rotXDeg * Math.PI) / 180,
       y: (activeComposition.about.rotYDeg * Math.PI) / 180,
@@ -1474,6 +1504,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     rotXDeg: activeComposition.interests.rotXDeg,
     rotYDeg: activeComposition.interests.rotYDeg,
     rotZDeg: activeComposition.interests.rotZDeg,
+    attachContourStipple: true,
     baseRotation: {
       x: (activeComposition.interests.rotXDeg * Math.PI) / 180,
       y: (activeComposition.interests.rotYDeg * Math.PI) / 180,
@@ -1759,29 +1790,28 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   }
 
   function setupContourStippleControls() {
-    const projectsState = () => floatingModels.find((s) => s.id === "projects");
-
     const applyAppearance = (settings) => {
-      const state = projectsState();
-      if (!state) return;
-      state.contourSettings = settings;
-      syncContourUniforms(state);
-      applyContourDisplayMode(state);
+      sharedContourSettings = settings;
+      contourModels.forEach((state) => {
+        state.contourSettings = settings;
+      });
+      syncContourUniformsAll();
+      applyContourDisplayModeAll();
     };
 
     const syncMode = (mode) => {
-      document.querySelectorAll("[data-proj-contour-mode]").forEach((btn) => {
-        btn.classList.toggle("is-active", btn.dataset.projContourMode === mode);
+      document.querySelectorAll("[data-contour-mode]").forEach((btn) => {
+        btn.classList.toggle("is-active", btn.dataset.contourMode === mode);
       });
     };
 
     const syncDebug = (debug) => {
-      document.querySelectorAll("[data-proj-contour-debug]").forEach((btn) => {
-        btn.classList.toggle("is-active", btn.dataset.projContourDebug === debug);
+      document.querySelectorAll("[data-contour-debug]").forEach((btn) => {
+        btn.classList.toggle("is-active", btn.dataset.contourDebug === debug);
       });
     };
 
-    const settings = loadContourSettings();
+    const settings = getSharedContourSettings();
     const map = [
       ["tune-proj-contour-sil", "tune-proj-contour-sil-val", "silhouette", 0, 1, 2],
       ["tune-proj-contour-int", "tune-proj-contour-int-val", "internal", 0, 1, 2],
@@ -1802,7 +1832,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       el.addEventListener("input", () => {
         const value = THREE.MathUtils.clamp(parseFloat(el.value) || min, min, max);
         if (out) out.textContent = value.toFixed(digits);
-        const next = { ...loadContourSettings(), [key]: value };
+        const next = { ...getSharedContourSettings(), [key]: value };
         saveContourSettings(next);
         applyAppearance(next);
       });
@@ -1813,7 +1843,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     if (cColor) {
       cColor.value = settings.contourColor;
       cColor.addEventListener("input", () => {
-        const next = { ...loadContourSettings(), contourColor: cColor.value };
+        const next = { ...getSharedContourSettings(), contourColor: cColor.value };
         saveContourSettings(next);
         applyAppearance(next);
       });
@@ -1821,7 +1851,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     if (sColor) {
       sColor.value = settings.surfaceColor;
       sColor.addEventListener("input", () => {
-        const next = { ...loadContourSettings(), surfaceColor: sColor.value };
+        const next = { ...getSharedContourSettings(), surfaceColor: sColor.value };
         saveContourSettings(next);
         applyAppearance(next);
       });
@@ -1830,24 +1860,24 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     syncMode(settings.mode);
     syncDebug(settings.debug);
 
-    document.querySelectorAll("[data-proj-contour-mode]").forEach((btn) => {
+    document.querySelectorAll("[data-contour-mode]").forEach((btn) => {
       btn.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        const mode = btn.dataset.projContourMode === "solid" ? "solid" : "contour";
-        const next = { ...loadContourSettings(), mode };
+        const mode = btn.dataset.contourMode === "solid" ? "solid" : "contour";
+        const next = { ...getSharedContourSettings(), mode };
         saveContourSettings(next);
         syncMode(mode);
         applyAppearance(next);
       });
     });
 
-    document.querySelectorAll("[data-proj-contour-debug]").forEach((btn) => {
+    document.querySelectorAll("[data-contour-debug]").forEach((btn) => {
       btn.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        const debug = btn.dataset.projContourDebug || "final";
-        const next = { ...loadContourSettings(), debug };
+        const debug = btn.dataset.contourDebug || "final";
+        const next = { ...getSharedContourSettings(), debug };
         saveContourSettings(next);
         syncDebug(debug);
         applyAppearance(next);
@@ -2309,11 +2339,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       updateCompositionLabels();
     }
 
-    const projects = floatingModels.find((s) => s.id === "projects");
-    const contourOn =
-      projects &&
-      projects.contourSettings?.mode === "contour" &&
-      renderProjectsContourPass(projects);
+    const contourOn = renderContourPass();
 
     renderer.autoClear = true;
     renderer.render(scene, activeCamera);
