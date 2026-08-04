@@ -61,69 +61,45 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     },
   };
 
-  const COMPOSITION_STORAGE_KEY = "stippled-ocean-float-tune-v4";
-  const COMPOSITION_SEED_KEY = "stippled-ocean-preset-seed";
-  const COMPOSITION_SEED_VALUE = "final-composition-v2";
-  const ABOUT_PLACEMENT_SEED_KEY = "stippled-ocean-about-placement-v045";
+  // Locked production look (SETTINGS_PRESETS["current-screenshot"] +
+  // COLOUR_PRESETS["cream-orange"] + contour defaults). Never read from localStorage.
+  const FINAL_LOOK = Object.freeze({
+    colours: Object.freeze({
+      background: "#f8e8ce",
+      bodies: "#d14a21",
+      waves: "#0873b5",
+    }),
+    visibility: Object.freeze({
+      bodiesOpacity: 1,
+      silhouette: 0.9,
+      internal: 0.55,
+      surfaceStrength: 0.25,
+      wavesOpacity: 1,
+      contrastGuide: false,
+    }),
+    mark: Object.freeze({
+      surfaceDensity: 1.15,
+      contourDensity: 1.95,
+      contourWidth: 0.9,
+      organicIrregularity: 0.12,
+      bodyDotScale: 1.3,
+      waveParticleDensity: 6,
+      // waveRidgeEmphasis locked at 0 — compiled out of ocean VS
+      // waveRidgeWidth unused after ridge compile-out
+      waveDotScale: 1.5,
+    }),
+    contour: Object.freeze({
+      mode: "contour",
+      edgeThreshold: 0.45,
+      contourCssPx: 0.9,
+      surfaceCssPx: 0.65,
+      debug: "final",
+      stippleSpacing: 2.2,
+      surfaceDensity: 0.55, // CONTOUR_DEFAULTS.surfaceDensity (contour surface slider)
+    }),
+  });
 
-  // One-time clear of older/incorrect saved tuning so the corrected preset can take effect
-  if (localStorage.getItem(COMPOSITION_SEED_KEY) !== COMPOSITION_SEED_VALUE) {
-    [
-      "stippled-ocean-float-tune",
-      "stippled-ocean-float-tune-v1",
-      "stippled-ocean-float-tune-v2",
-      "stippled-ocean-float-tune-v3",
-      COMPOSITION_STORAGE_KEY,
-    ].forEach((key) => localStorage.removeItem(key));
-    localStorage.setItem(COMPOSITION_SEED_KEY, COMPOSITION_SEED_VALUE);
-  }
-
-  // Targeted About placement migration (immersion 0.45) — does not wipe other models
-  function migrateAboutPlacement(comp) {
-    if (!comp?.about) return comp;
-    const a = FINAL_COMPOSITION.about;
-    comp.about = {
-      ...comp.about,
-      x: a.x,
-      z: a.z,
-      scale: a.scale,
-      immersion: a.immersion,
-      immersionOffset: a.immersionOffset,
-      bob: a.bob,
-      maxTiltDeg: a.maxTiltDeg,
-      rotXDeg: a.rotXDeg,
-      rotYDeg: a.rotYDeg,
-      rotZDeg: a.rotZDeg,
-    };
-    return comp;
-  }
-
-  function cloneComposition(src) {
-    return JSON.parse(JSON.stringify(src));
-  }
-
-  function loadStoredComposition() {
-    try {
-      const raw = localStorage.getItem(COMPOSITION_STORAGE_KEY);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (parsed?.projects && parsed?.about && parsed?.interests) return parsed;
-    } catch (_) {
-      /* ignore corrupt storage */
-    }
-    return null;
-  }
-
-  const storedComposition = loadStoredComposition();
-  let activeComposition = storedComposition || cloneComposition(FINAL_COMPOSITION);
-  if (localStorage.getItem(ABOUT_PLACEMENT_SEED_KEY) !== "1") {
-    activeComposition = migrateAboutPlacement(activeComposition);
-    localStorage.setItem(COMPOSITION_STORAGE_KEY, JSON.stringify(activeComposition));
-    localStorage.setItem(ABOUT_PLACEMENT_SEED_KEY, "1");
-  }
-  if (!storedComposition) {
-    localStorage.setItem(COMPOSITION_STORAGE_KEY, JSON.stringify(activeComposition));
-  }
+  const activeComposition = FINAL_COMPOSITION;
 
   const canvas = document.getElementById("ocean");
 
@@ -148,203 +124,54 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     600
   );
 
-  // Low-angle view so the ocean fills roughly the lower 2/5 of the frame
+  // ─── Centred elevated hero framing (ordinary pan/zoom navigation space) ─
+  // Composition reference: original-vision — raft left, figure centre, shelf right.
+  // Downward pitch ≈ 14.5° (atan(16.45/64.0)). FOV unchanged; bodies stay fixed.
+  // Look target sits in mid-ocean; bodies read further along the same view ray.
+  const HERO_LOOK_AT = Object.freeze({ x: 3.0, y: 0.95, z: -38 });
+  const HERO_POSITION = Object.freeze({ x: 3.0, y: 17.4, z: 26 });
+
+  function heroDistancePull() {
+    // Prefer aspect over width alone so portrait keeps the full trio in frame.
+    // Desktop (~1.6 aspect) stays at the canonical hero distance.
+    const w = window.innerWidth;
+    const aspect = w / Math.max(window.innerHeight, 1);
+    if (aspect < 0.7) return 3.15;
+    if (aspect < 1.0) return 1.55;
+    if (aspect < 1.25) return 1.14;
+    if (w < 1100) return 1.05;
+    return 1;
+  }
+
+  // Scratch used only while applying hero / pitch clamps (no per-frame alloc).
+  const _heroOffset = new THREE.Vector3();
+
+  function writeHeroPose(outPos, outLook) {
+    outLook.set(HERO_LOOK_AT.x, HERO_LOOK_AT.y, HERO_LOOK_AT.z);
+    _heroOffset.set(
+      HERO_POSITION.x - HERO_LOOK_AT.x,
+      HERO_POSITION.y - HERO_LOOK_AT.y,
+      HERO_POSITION.z - HERO_LOOK_AT.z
+    );
+    const pull = heroDistancePull();
+    if (pull !== 1) _heroOffset.multiplyScalar(pull);
+    outPos.copy(outLook).add(_heroOffset);
+  }
+
   const cameraState = {
-    position: new THREE.Vector3(0, 7.5, 28),
-    lookAt: new THREE.Vector3(0, 0.8, -8),
-    targetPosition: new THREE.Vector3(0, 7.5, 28),
-    targetLookAt: new THREE.Vector3(0, 0.8, -8),
-  };
-  camera.position.copy(cameraState.position);
-  camera.lookAt(cameraState.lookAt);
-
-  // ─── Dual view: Perspective (existing) + Top (ortho composition) ─────
-  // TEMP: remove with view-bar / comp-labels markup when composition is locked
-  let activeView = "perspective"; // "perspective" | "top"
-  let activeCamera = camera;
-
-  const perspectiveSnapshot = {
     position: new THREE.Vector3(),
     lookAt: new THREE.Vector3(),
     targetPosition: new THREE.Vector3(),
     targetLookAt: new THREE.Vector3(),
   };
+  // Load directly into hero pose — no fly-in, no one-frame intermediate.
+  writeHeroPose(cameraState.position, cameraState.lookAt);
+  cameraState.targetPosition.copy(cameraState.position);
+  cameraState.targetLookAt.copy(cameraState.lookAt);
+  camera.position.copy(cameraState.position);
+  camera.lookAt(cameraState.lookAt);
 
-  const topView = {
-    centerX: 0,
-    centerZ: OCEAN_CENTER_Z,
-    halfExtent: 36,
-    defaultCenterX: 0,
-    defaultCenterZ: OCEAN_CENTER_Z,
-    defaultHalfExtent: 36,
-    minHalfExtent: 6,
-    maxHalfExtent: 220, // enough to Fit All across Z ≈ -160…+80
-    height: 220,
-  };
-
-  const topCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 800);
-  // Looking straight down: screen +X = world +X, screen up = world −Z (so +Z runs vertically down the screen)
-  topCamera.up.set(0, 0, -1);
-  topCamera.position.set(topView.centerX, topView.height, topView.centerZ);
-  topCamera.lookAt(topView.centerX, 0, topView.centerZ);
-
-  function updateTopCameraFrustum() {
-    const aspect = window.innerWidth / Math.max(window.innerHeight, 1);
-    const halfH = topView.halfExtent;
-    const halfW = halfH * aspect;
-    topCamera.left = -halfW;
-    topCamera.right = halfW;
-    topCamera.top = halfH;
-    topCamera.bottom = -halfH;
-    topCamera.position.set(topView.centerX, topView.height, topView.centerZ);
-    topCamera.lookAt(topView.centerX, 0, topView.centerZ);
-    topCamera.updateProjectionMatrix();
-  }
-
-  function syncTopZoomSlider() {
-    const slider = document.getElementById("view-top-zoom");
-    const out = document.getElementById("view-top-zoom-val");
-    if (!slider) return;
-    const t =
-      1 -
-      (topView.halfExtent - topView.minHalfExtent) /
-        (topView.maxHalfExtent - topView.minHalfExtent);
-    const pct = Math.round(THREE.MathUtils.clamp(t, 0, 1) * 100);
-    slider.value = String(pct);
-    if (out) out.textContent = String(pct);
-  }
-
-  function setTopHalfExtentFromZoomSlider(pct) {
-    const t = THREE.MathUtils.clamp(pct / 100, 0, 1);
-    topView.halfExtent = THREE.MathUtils.lerp(
-      topView.maxHalfExtent,
-      topView.minHalfExtent,
-      t
-    );
-    updateTopCameraFrustum();
-  }
-
-  function savePerspectiveSnapshot() {
-    perspectiveSnapshot.position.copy(cameraState.position);
-    perspectiveSnapshot.lookAt.copy(cameraState.lookAt);
-    perspectiveSnapshot.targetPosition.copy(cameraState.targetPosition);
-    perspectiveSnapshot.targetLookAt.copy(cameraState.targetLookAt);
-  }
-
-  function restorePerspectiveSnapshot() {
-    cameraState.position.copy(perspectiveSnapshot.position);
-    cameraState.lookAt.copy(perspectiveSnapshot.lookAt);
-    cameraState.targetPosition.copy(perspectiveSnapshot.targetPosition);
-    cameraState.targetLookAt.copy(perspectiveSnapshot.targetLookAt);
-    camera.position.copy(cameraState.position);
-    camera.lookAt(cameraState.lookAt);
-  }
-
-  function fitTopToAllModels() {
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minZ = Infinity;
-    let maxZ = -Infinity;
-    let any = false;
-
-    floatingModels.forEach((m) => {
-      const r = Math.max(m.halfHeight * m.scale * 1.35, 2.5);
-      minX = Math.min(minX, m.x - r);
-      maxX = Math.max(maxX, m.x + r);
-      minZ = Math.min(minZ, m.z - r);
-      maxZ = Math.max(maxZ, m.z + r);
-      any = true;
-    });
-
-    if (!any) {
-      topView.centerX = 0;
-      topView.centerZ = OCEAN_CENTER_Z;
-      topView.halfExtent = topView.defaultHalfExtent;
-    } else {
-      topView.centerX = (minX + maxX) * 0.5;
-      topView.centerZ = (minZ + maxZ) * 0.5;
-      const spanX = Math.max(maxX - minX, 4);
-      const spanZ = Math.max(maxZ - minZ, 4);
-      const aspect = window.innerWidth / Math.max(window.innerHeight, 1);
-      const pad = 1.35;
-      topView.halfExtent = Math.max(spanZ * 0.5 * pad, (spanX * 0.5 * pad) / aspect);
-      topView.halfExtent = THREE.MathUtils.clamp(
-        topView.halfExtent,
-        topView.minHalfExtent,
-        topView.maxHalfExtent
-      );
-    }
-
-    updateTopCameraFrustum();
-    syncTopZoomSlider();
-  }
-
-  function resetTopView() {
-    topView.centerX = topView.defaultCenterX;
-    topView.centerZ = topView.defaultCenterZ;
-    topView.halfExtent = topView.defaultHalfExtent;
-    updateTopCameraFrustum();
-    syncTopZoomSlider();
-  }
-
-  function setCompositionAidsVisible(visible) {
-    const labels = document.getElementById("comp-labels");
-    const axes = document.getElementById("comp-axes");
-    if (labels) {
-      labels.classList.toggle("is-hidden", !visible);
-      labels.setAttribute("aria-hidden", visible ? "false" : "true");
-    }
-    if (axes) {
-      axes.classList.toggle("is-hidden", !visible);
-      axes.setAttribute("aria-hidden", visible ? "false" : "true");
-    }
-  }
-
-  function setActiveView(mode) {
-    if (mode === activeView) return;
-
-    if (mode === "top") {
-      savePerspectiveSnapshot();
-      activeView = "top";
-      activeCamera = topCamera;
-      updateTopCameraFrustum();
-      syncTopZoomSlider();
-      setCompositionAidsVisible(true);
-    } else {
-      activeView = "perspective";
-      activeCamera = camera;
-      restorePerspectiveSnapshot();
-      setCompositionAidsVisible(false);
-    }
-
-    document.querySelectorAll(".view-btn").forEach((btn) => {
-      btn.classList.toggle("is-active", btn.dataset.view === activeView);
-    });
-    const topTools = document.getElementById("view-top-tools");
-    if (topTools) topTools.classList.toggle("is-enabled", activeView === "top");
-  }
-
-  const _labelProj = new THREE.Vector3();
-  function updateCompositionLabels() {
-    if (activeView !== "top") return;
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    floatingModels.forEach((m) => {
-      const el = document.querySelector(`.comp-label[data-model="${m.id}"]`);
-      if (!el) return;
-      _labelProj.set(m.x, m.group.position.y + Math.max(1.2, m.halfHeight * m.scale * 0.35), m.z);
-      _labelProj.project(topCamera);
-      if (_labelProj.z > 1) {
-        el.style.display = "none";
-        return;
-      }
-      el.style.display = "block";
-      el.style.left = `${(_labelProj.x * 0.5 + 0.5) * w}px`;
-      el.style.top = `${(-_labelProj.y * 0.5 + 0.5) * h}px`;
-    });
-  }
-
-  updateTopCameraFrustum();
+  // Perspective camera only (top/ortho composition view removed).
 
   // ─── Noise helpers (CPU, for raycast height sampling) ───────────────
   function hash2(x, z) {
@@ -505,6 +332,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     float splashHeight(vec2 xz, float t) {
       float extra = 0.0;
       for (int i = 0; i < ${MAX_SPLASHES}; i++) {
+        if (i >= uActiveSplashCount) break;
         vec3 c = uSplashCenters[i];
         if (c.y < -100.0) continue;
         float sTime = uSplashData[i * 4 + 0];
@@ -588,9 +416,8 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     uWaveOpacity: { value: 1 },
     uWaveDotScale: { value: 1 },
     uWaveParticleDensity: { value: 1 },
-    uWaveRidgeEmphasis: { value: 0 },
-    uWaveRidgeWidth: { value: 1 },
     uOceanMasterMult: { value: OCEAN_MASTER_MULT },
+    uActiveSplashCount: { value: 0 },
   };
 
   const material = new THREE.ShaderMaterial({
@@ -612,9 +439,8 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       uniform float uSplashData[${MAX_SPLASHES * 4}];
       uniform float uWaveDotScale;
       uniform float uWaveParticleDensity;
-      uniform float uWaveRidgeEmphasis;
-      uniform float uWaveRidgeWidth;
       uniform float uOceanMasterMult;
+      uniform int uActiveSplashCount;
 
       varying float vAlpha;
       varying float vBright;
@@ -664,19 +490,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         float depthFade = smoothstep(uOceanCenter.y - uOceanRadius * 0.95, uOceanCenter.y + uOceanRadius * 0.35, pos.z);
 
         // Stipple density: troughs sparse, crests dense/bright
+        // Ridge emphasis compiled out (locked FINAL_LOOK waveRidgeEmphasis = 0):
+        // former ridge add was *0, and size *= mix(1.0, 1.15, ridge*2) was *= 1.0.
         float densityGate = mix(0.12, 1.0, pow(heightNorm, 1.65));
         densityGate *= mix(0.55, 1.0, depthFade) * edgeFade;
-
-        // Ridge / fold emphasis from wave-height derivatives (does not alter displacement)
-        float eps = 0.55;
-        float hx = waveHeight(pos.xz + vec2(eps, 0.0), t) - waveHeight(pos.xz - vec2(eps, 0.0), t);
-        float hz = waveHeight(pos.xz + vec2(0.0, eps), t) - waveHeight(pos.xz - vec2(0.0, eps), t);
-        float slope = length(vec2(hx, hz)) / max(2.0 * eps, 1e-4);
-        float widthK = max(uWaveRidgeWidth, 0.25);
-        float ridge = smoothstep(0.12 * widthK, 0.95 * widthK, slope);
-        ridge = max(ridge, smoothstep(0.55, 1.85, max(h, 0.0)) * 0.55);
-        ridge *= clamp(uWaveRidgeEmphasis, 0.0, 4.0) * 0.28;
-        densityGate = clamp(densityGate + ridge, 0.0, 1.35);
 
         // Ranked master field: density 1 ≈ legacy keep rate on base count
         float dens = max(uWaveParticleDensity, 0.01);
@@ -690,7 +507,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         float size = mix(1.0, 2.35, pow(heightNorm, 1.4));
         size *= mix(0.7, 1.1, depthFade) * mix(0.55, 1.0, edgeFade);
         size += splash * 0.18;
-        size *= mix(1.0, 1.15, clamp(ridge * 2.0, 0.0, 1.0));
         float pr = uPixelRatio;
         gl_PointSize = size * pr * (45.0 / -mvPosition.z) * uWaveDotScale;
         // Upper bound scales with dot scale so density≠size and high scale is not silently clamped away
@@ -746,6 +562,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     uTime: uniforms.uTime,
     uSplashCenters: uniforms.uSplashCenters,
     uSplashData: uniforms.uSplashData,
+    uActiveSplashCount: uniforms.uActiveSplashCount,
     uOceanCenter: uniforms.uOceanCenter,
     uOceanRadius: uniforms.uOceanRadius,
   };
@@ -761,6 +578,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       uniform float uTime;
       uniform vec3 uSplashCenters[${MAX_SPLASHES}];
       uniform float uSplashData[${MAX_SPLASHES * 4}];
+      uniform int uActiveSplashCount;
       uniform vec2 uOceanCenter;
       uniform float uOceanRadius;
       varying float vViewZ;
@@ -819,11 +637,9 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     renderer.setRenderTarget(waterDepthRT);
     renderer.setClearColor(0x000000, 0);
     renderer.clear(true, true, true);
-    renderer.render(waterDepthScene, activeCamera);
+    renderer.render(waterDepthScene, camera);
     renderer.setRenderTarget(null);
-    if (typeof applyBackgroundColour === "function") {
-      applyBackgroundColour(getAppearanceColours().background);
-    }
+    restoreBackgroundClearColor();
   }
 
   function makeWaterDepthUniforms() {
@@ -869,6 +685,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       uTime: uniforms.uTime,
       uSplashCenters: uniforms.uSplashCenters,
       uSplashData: uniforms.uSplashData,
+      uActiveSplashCount: uniforms.uActiveSplashCount,
       uWaveClipBias: { value: WAVE_CLIP_BIAS },
     };
   }
@@ -877,6 +694,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     uniform float uTime;
     uniform vec3 uSplashCenters[${MAX_SPLASHES}];
     uniform float uSplashData[${MAX_SPLASHES * 4}];
+    uniform int uActiveSplashCount;
     uniform float uWaveClipBias;
   `;
 
@@ -894,7 +712,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   // Same shaders / RT / settings for Projects, About and Interests.
 
   const CONTOUR_LAYER = 1;
-  const CONTOUR_STORAGE_KEY = "stippled-ocean-proj-contour-stipple-v1";
   // Legacy base sample count; master is 8× ranked so surface density 1..8 reveals stably
   const CONTOUR_SURFACE_BASE = 5500;
   const CONTOUR_SURFACE_MASTER_MULT = 8;
@@ -907,103 +724,32 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     interests: 0xc07a03,
   };
 
-  [
-    "stippled-ocean-proj-stipple-proto-v1",
-    "stippled-ocean-proj-adaptive-stipple-v1",
-  ].forEach((k) => localStorage.removeItem(k));
+  // Body surface master trim threshold (opt 3). Proof:
+  //   uSurfaceMasterScale = (0.55 * 5500) / 44000 = 0.06875
+  //   max thresh = 0.06875 * mark.surfaceDensity(1.15) * distSurf(1) = 0.0790625
+  // Organic irreg only reduces keep via jitterGate; never raises thresh.
+  const SURFACE_RANK_KEEP_MAX = 0.0790625 + 1e-6;
 
-  const CONTOUR_DEFAULTS = {
-    mode: "contour", // "solid" | "contour"
-    silhouette: 0.9,
-    internal: 0.55,
-    edgeThreshold: 0.45,
-    stippleSpacing: 2.2,
-    contourCssPx: 0.9,
-    surfaceStrength: 0.25,
-    surfaceCssPx: 0.65,
-    surfaceDensity: 0.55,
-    contourColor: "#f4efe6",
-    surfaceColor: "#d8d2c8",
-    debug: "final", // final | depth | normals | edges
-  };
-
-  let sharedContourSettings = null;
+  // Locked contour settings (baked from FINAL_LOOK; no localStorage).
+  const sharedContourSettings = Object.freeze({
+    mode: FINAL_LOOK.contour.mode,
+    silhouette: FINAL_LOOK.visibility.silhouette,
+    internal: FINAL_LOOK.visibility.internal,
+    edgeThreshold: FINAL_LOOK.contour.edgeThreshold,
+    stippleSpacing: FINAL_LOOK.contour.stippleSpacing,
+    contourCssPx: FINAL_LOOK.contour.contourCssPx,
+    surfaceStrength: FINAL_LOOK.visibility.surfaceStrength,
+    surfaceCssPx: FINAL_LOOK.contour.surfaceCssPx,
+    surfaceDensity: FINAL_LOOK.contour.surfaceDensity,
+    contourColor: FINAL_LOOK.colours.bodies,
+    surfaceColor: FINAL_LOOK.colours.bodies,
+    debug: FINAL_LOOK.contour.debug,
+  });
   const contourModels = []; // floating-model states with contour attached
 
   function getSharedContourSettings() {
-    if (!sharedContourSettings) {
-      sharedContourSettings = loadContourSettings();
-    }
     return sharedContourSettings;
   }
-
-  function loadContourSettings() {
-    try {
-      const raw = localStorage.getItem(CONTOUR_STORAGE_KEY);
-      if (!raw) return { ...CONTOUR_DEFAULTS };
-      const p = JSON.parse(raw);
-      const debugOk = ["final", "depth", "normals", "edges"].includes(p.debug);
-      return {
-        mode: p.mode === "solid" ? "solid" : "contour",
-        silhouette: THREE.MathUtils.clamp(Number(p.silhouette) ?? 0.9, 0, 1.5),
-        internal: THREE.MathUtils.clamp(Number(p.internal) ?? 0.55, 0, 1.5),
-        edgeThreshold: THREE.MathUtils.clamp(
-          Number(p.edgeThreshold) ?? 0.45,
-          0.05,
-          1.5
-        ),
-        stippleSpacing: THREE.MathUtils.clamp(
-          Number(p.stippleSpacing) ?? 2.2,
-          1.2,
-          5
-        ),
-        contourCssPx: THREE.MathUtils.clamp(
-          Number(p.contourCssPx) ?? 0.9,
-          0.5,
-          1.3
-        ),
-        surfaceStrength: THREE.MathUtils.clamp(
-          Number(p.surfaceStrength) ?? 0.25,
-          0,
-          0.8
-        ),
-        surfaceCssPx: THREE.MathUtils.clamp(
-          Number(p.surfaceCssPx) ?? 0.65,
-          0.4,
-          0.9
-        ),
-        surfaceDensity: THREE.MathUtils.clamp(
-          Number(p.surfaceDensity) ?? 0.55,
-          0.15,
-          1
-        ),
-        contourColor:
-          typeof p.contourColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.contourColor)
-            ? p.contourColor
-            : CONTOUR_DEFAULTS.contourColor,
-        surfaceColor:
-          typeof p.surfaceColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.surfaceColor)
-            ? p.surfaceColor
-            : CONTOUR_DEFAULTS.surfaceColor,
-        debug: debugOk ? p.debug : "final",
-      };
-    } catch (_) {
-      return { ...CONTOUR_DEFAULTS };
-    }
-  }
-
-  function saveContourSettings(settings) {
-    localStorage.setItem(CONTOUR_STORAGE_KEY, JSON.stringify(settings));
-  }
-
-  // ─── Global appearance colours (separate from composition storage) ───
-  const COLOUR_STORAGE_KEY = "stippled-ocean-appearance-colours-v1";
-  // Detected from runtime before this feature — do not invent new look
-  const COLOUR_ORIGINALS = Object.freeze({
-    background: "#000000",
-    bodies: CONTOUR_DEFAULTS.contourColor, // was contour stipple base hue
-    waves: "#" + uniforms.uWaveColor.value.getHexString(), // was vec3(1,0.97,0.9)
-  });
 
   function normalizeHexColour(value, fallback) {
     if (typeof value !== "string") return fallback;
@@ -1013,936 +759,55 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     return fallback;
   }
 
-  function deriveSurfaceHexFromBodies(bodiesHex) {
-    // Same authoritative Bodies hue — ghost hierarchy is alpha (surface strength), not a darker hex
-    return bodiesHex;
-  }
+  const appearanceColours = {
+    background: normalizeHexColour(FINAL_LOOK.colours.background, "#f8e8ce"),
+    bodies: normalizeHexColour(FINAL_LOOK.colours.bodies, "#d14a21"),
+    waves: normalizeHexColour(FINAL_LOOK.colours.waves, "#0873b5"),
+  };
 
-  function loadAppearanceColours() {
-    try {
-      const raw = localStorage.getItem(COLOUR_STORAGE_KEY);
-      if (!raw) return { ...COLOUR_ORIGINALS };
-      const p = JSON.parse(raw);
-      return {
-        background: normalizeHexColour(p.background, COLOUR_ORIGINALS.background),
-        bodies: normalizeHexColour(p.bodies, COLOUR_ORIGINALS.bodies),
-        waves: normalizeHexColour(p.waves, COLOUR_ORIGINALS.waves),
-      };
-    } catch (_) {
-      return { ...COLOUR_ORIGINALS };
-    }
-  }
-
-  function saveAppearanceColours(colours) {
-    localStorage.setItem(COLOUR_STORAGE_KEY, JSON.stringify(colours));
-  }
-
-  let appearanceColours = loadAppearanceColours();
+  const bgClearColor = new THREE.Color(appearanceColours.background);
 
   function getAppearanceColours() {
     return appearanceColours;
   }
 
+  function restoreBackgroundClearColor() {
+    renderer.setClearColor(bgClearColor, 1);
+  }
+
   function applyBackgroundColour(hex) {
-    const c = new THREE.Color(hex);
-    renderer.setClearColor(c, 1);
-    if (scene.fog) scene.fog.color.copy(c);
-    document.documentElement.style.background = hex;
-    document.body.style.background = hex;
+    const normalized = normalizeHexColour(hex, appearanceColours.background);
+    appearanceColours.background = normalized;
+    bgClearColor.set(normalized);
+    renderer.setClearColor(bgClearColor, 1);
+    if (scene.fog) scene.fog.color.copy(bgClearColor);
+    document.documentElement.style.background = normalized;
+    document.body.style.background = normalized;
   }
 
   function applyBodiesColour(hex) {
-    contourCompositeUniforms.uContourColor.value.set(hex);
+    const normalized = normalizeHexColour(hex, appearanceColours.bodies);
+    appearanceColours.bodies = normalized;
+    if (contourCompositeUniforms?.uContourColor) {
+      contourCompositeUniforms.uContourColor.value.set(normalized);
+    }
     contourModels.forEach((state) => {
       if (state.surfaceMaterial?.uniforms?.uColor) {
-        state.surfaceMaterial.uniforms.uColor.value.set(hex);
+        state.surfaceMaterial.uniforms.uColor.value.set(normalized);
       }
     });
-    const s = getSharedContourSettings();
-    if (s.contourColor !== hex || s.surfaceColor !== hex) {
-      sharedContourSettings = {
-        ...s,
-        contourColor: hex,
-        surfaceColor: hex,
-      };
-    }
   }
 
   function applyWavesColour(hex) {
-    uniforms.uWaveColor.value.set(hex);
-  }
-
-  function applyAppearanceColours(colours) {
-    appearanceColours = {
-      background: normalizeHexColour(colours.background, COLOUR_ORIGINALS.background),
-      bodies: normalizeHexColour(colours.bodies, COLOUR_ORIGINALS.bodies),
-      waves: normalizeHexColour(colours.waves, COLOUR_ORIGINALS.waves),
-    };
-    applyBackgroundColour(appearanceColours.background);
-    applyBodiesColour(appearanceColours.bodies);
-    applyWavesColour(appearanceColours.waves);
-    if (typeof updatePresetUI === "function") updatePresetUI();
-  }
-
-  // ─── Global visibility (appearance-only; separate from composition) ───
-  const VISIBILITY_STORAGE_KEY = "stippled-ocean-appearance-visibility-v1";
-  const VISIBILITY_ORIGINALS = Object.freeze({
-    bodiesOpacity: 1,
-    silhouette: CONTOUR_DEFAULTS.silhouette,
-    internal: CONTOUR_DEFAULTS.internal,
-    surfaceStrength: CONTOUR_DEFAULTS.surfaceStrength,
-    wavesOpacity: 1,
-    contrastGuide: false,
-  });
-
-  const REFERENCE_LIGHT_COLOURS = Object.freeze({
-    background: "#f3e9d6",
-    bodies: "#bb4121",
-    waves: "#023b69",
-  });
-
-  function loadVisibilitySettings() {
-    try {
-      const raw = localStorage.getItem(VISIBILITY_STORAGE_KEY);
-      if (!raw) {
-        // First run: inherit existing contour strengths so look stays unchanged
-        const c = getSharedContourSettings();
-        return {
-          ...VISIBILITY_ORIGINALS,
-          silhouette: c.silhouette,
-          internal: c.internal,
-          surfaceStrength: c.surfaceStrength,
-        };
-      }
-      const p = JSON.parse(raw);
-      return {
-        bodiesOpacity: THREE.MathUtils.clamp(Number(p.bodiesOpacity) ?? 1, 0, 1),
-        silhouette: THREE.MathUtils.clamp(Number(p.silhouette) ?? 0.9, 0, 1.5),
-        internal: THREE.MathUtils.clamp(Number(p.internal) ?? 0.55, 0, 1.5),
-        surfaceStrength: THREE.MathUtils.clamp(
-          Number(p.surfaceStrength) ?? 0.25,
-          0,
-          0.8
-        ),
-        wavesOpacity: THREE.MathUtils.clamp(Number(p.wavesOpacity) ?? 1, 0, 1),
-        contrastGuide: p.contrastGuide === true,
-      };
-    } catch (_) {
-      return { ...VISIBILITY_ORIGINALS };
-    }
-  }
-
-  function saveVisibilitySettings(settings) {
-    localStorage.setItem(VISIBILITY_STORAGE_KEY, JSON.stringify(settings));
-  }
-
-  let appearanceVisibility = loadVisibilitySettings();
-
-  function getVisibilitySettings() {
-    return appearanceVisibility;
-  }
-
-  // ─── Mark-making (density / spacing / irregularity — appearance only) ─
-  const MARK_STORAGE_KEY = "stippled-ocean-appearance-mark-making-v1";
-  const MARK_ORIGINALS = Object.freeze({
-    surfaceDensity: 1,
-    contourDensity: 1,
-    contourWidth: 0.9,
-    organicIrregularity: 0,
-    bodyDotScale: 1,
-    waveParticleDensity: 1,
-    waveRidgeEmphasis: 0,
-    waveRidgeWidth: 1,
-    waveDotScale: 1,
-  });
-
-  const REFERENCE_TEXTURE = Object.freeze({
-    visibility: {
-      bodiesOpacity: 1,
-      silhouette: 1.25,
-      internal: 1,
-      surfaceStrength: 0.45,
-      wavesOpacity: 1,
-      contrastGuide: false,
-    },
-    mark: {
-      surfaceDensity: 1.75,
-      contourDensity: 2.25,
-      contourWidth: 1.5,
-      organicIrregularity: 0.35,
-      bodyDotScale: 1.75,
-      waveParticleDensity: 2.25,
-      waveRidgeEmphasis: 2.25,
-      waveRidgeWidth: 1.4,
-      waveDotScale: 1.8,
-    },
-  });
-
-  function loadMarkSettings() {
-    try {
-      const raw = localStorage.getItem(MARK_STORAGE_KEY);
-      // Migrate prior visibility-stored dot scales once
-      let migratedDots = null;
-      try {
-        const visRaw = localStorage.getItem(VISIBILITY_STORAGE_KEY);
-        if (visRaw) {
-          const vp = JSON.parse(visRaw);
-          if (vp && (vp.bodyDotScale != null || vp.waveDotScale != null)) {
-            migratedDots = {
-              bodyDotScale: Number(vp.bodyDotScale) || 1,
-              waveDotScale: Number(vp.waveDotScale) || 1,
-            };
-          }
-        }
-      } catch (_) {
-        /* ignore */
-      }
-      if (!raw) {
-        return {
-          ...MARK_ORIGINALS,
-          ...(migratedDots
-            ? {
-                bodyDotScale: THREE.MathUtils.clamp(
-                  migratedDots.bodyDotScale,
-                  0.25,
-                  8
-                ),
-                waveDotScale: THREE.MathUtils.clamp(
-                  migratedDots.waveDotScale,
-                  0.25,
-                  8
-                ),
-              }
-            : null),
-        };
-      }
-      const p = JSON.parse(raw);
-      return {
-        surfaceDensity: THREE.MathUtils.clamp(Number(p.surfaceDensity) ?? 1, 0.25, 8),
-        contourDensity: THREE.MathUtils.clamp(Number(p.contourDensity) ?? 1, 0.25, 8),
-        contourWidth: THREE.MathUtils.clamp(Number(p.contourWidth) ?? 0.9, 0.5, 4),
-        organicIrregularity: THREE.MathUtils.clamp(
-          Number(p.organicIrregularity) ?? 0,
-          0,
-          1
-        ),
-        bodyDotScale: THREE.MathUtils.clamp(Number(p.bodyDotScale) ?? 1, 0.25, 8),
-        waveParticleDensity: THREE.MathUtils.clamp(
-          Number(p.waveParticleDensity) ?? 1,
-          0.25,
-          8
-        ),
-        waveRidgeEmphasis: THREE.MathUtils.clamp(
-          Number(p.waveRidgeEmphasis) ?? 0,
-          0,
-          4
-        ),
-        waveRidgeWidth: THREE.MathUtils.clamp(Number(p.waveRidgeWidth) ?? 1, 0.25, 4),
-        waveDotScale: THREE.MathUtils.clamp(Number(p.waveDotScale) ?? 1, 0.25, 8),
-      };
-    } catch (_) {
-      return { ...MARK_ORIGINALS };
-    }
-  }
-
-  function saveMarkSettings(settings) {
-    localStorage.setItem(MARK_STORAGE_KEY, JSON.stringify(settings));
-  }
-
-  let appearanceMark = loadMarkSettings();
-
-  function getMarkSettings() {
-    return appearanceMark;
-  }
-
-  // Colour presets (immutable). Applying goes through applyAppearanceColours only.
-  const COLOUR_PRESETS = Object.freeze({
-    "black-white": Object.freeze({
-      background: "#000000",
-      bodies: "#f4efe6",
-      waves: "#fffcf3",
-    }),
-    "cream-orange": Object.freeze({
-      background: "#f8e8ce",
-      bodies: "#d14a21",
-      waves: "#0873b5",
-    }),
-    "cyan-future": Object.freeze({
-      background: "#000000",
-      bodies: "#20cccf",
-      waves: "#ffffff",
-    }),
-    "sunset-blaze": Object.freeze({
-      background: "#f75636",
-      bodies: "#ffffff",
-      waves: "#2c152d",
-    }),
-  });
-
-  // Settings presets — visibility + mark-making + shared contour appearance only.
-  // Original Mono recovered from VISIBILITY_ORIGINALS, MARK_ORIGINALS, and
-  // CONTOUR_DEFAULTS (identical in aa420c4 / abf8565 / bd83b33 checkpoints).
-  const SETTINGS_PRESETS = Object.freeze({
-    "original-mono": Object.freeze({
-      visibility: Object.freeze({ ...VISIBILITY_ORIGINALS }),
-      mark: Object.freeze({ ...MARK_ORIGINALS }),
-      contour: Object.freeze({
-        mode: "contour",
-        edgeThreshold: CONTOUR_DEFAULTS.edgeThreshold,
-        contourCssPx: CONTOUR_DEFAULTS.contourCssPx,
-        surfaceCssPx: CONTOUR_DEFAULTS.surfaceCssPx,
-        debug: "final",
-        stippleSpacing: CONTOUR_DEFAULTS.stippleSpacing,
-        surfaceDensity: CONTOUR_DEFAULTS.surfaceDensity,
-      }),
-    }),
-    "current-screenshot": Object.freeze({
-      visibility: Object.freeze({
-        bodiesOpacity: 1,
-        silhouette: 0.9,
-        internal: 0.55,
-        surfaceStrength: 0.25,
-        wavesOpacity: 1,
-        contrastGuide: false,
-      }),
-      mark: Object.freeze({
-        surfaceDensity: 1.15,
-        contourDensity: 1.95,
-        contourWidth: 0.9,
-        organicIrregularity: 0.12,
-        bodyDotScale: 1.3,
-        waveParticleDensity: 6,
-        waveRidgeEmphasis: 0,
-        waveRidgeWidth: 1,
-        waveDotScale: 1.5,
-      }),
-      contour: Object.freeze({
-        mode: "contour",
-        edgeThreshold: 0.45,
-        contourCssPx: 0.9,
-        surfaceCssPx: 0.65,
-        debug: "final",
-        stippleSpacing: CONTOUR_DEFAULTS.stippleSpacing,
-        surfaceDensity: CONTOUR_DEFAULTS.surfaceDensity,
-      }),
-    }),
-    "refined-hierarchy": Object.freeze({
-      visibility: Object.freeze({
-        bodiesOpacity: 1,
-        silhouette: 1.15,
-        internal: 0.7,
-        surfaceStrength: 0.25,
-        wavesOpacity: 1,
-        contrastGuide: false,
-      }),
-      mark: Object.freeze({
-        surfaceDensity: 1.75,
-        contourDensity: 2.75,
-        contourWidth: 1.2,
-        organicIrregularity: 0.28,
-        bodyDotScale: 1.35,
-        waveParticleDensity: 3.75,
-        waveRidgeEmphasis: 2.1,
-        waveRidgeWidth: 1.35,
-        waveDotScale: 1.35,
-      }),
-      contour: Object.freeze({
-        mode: "contour",
-        edgeThreshold: 0.45,
-        contourCssPx: 0.9,
-        surfaceCssPx: 0.65,
-        debug: "final",
-        stippleSpacing: CONTOUR_DEFAULTS.stippleSpacing,
-        surfaceDensity: CONTOUR_DEFAULTS.surfaceDensity,
-      }),
-    }),
-  });
-
-  function coloursMatchPreset(colours, preset) {
-    return (
-      normalizeHexColour(colours.background, "") === preset.background &&
-      normalizeHexColour(colours.bodies, "") === preset.bodies &&
-      normalizeHexColour(colours.waves, "") === preset.waves
-    );
-  }
-
-  function nearEq(a, b, eps = 0.001) {
-    return Math.abs(Number(a) - Number(b)) <= eps;
-  }
-
-  function settingsMatchPreset(vis, mark, contour, preset) {
-    const pv = preset.visibility;
-    const pm = preset.mark;
-    const pc = preset.contour;
-    const visOk =
-      nearEq(vis.bodiesOpacity, pv.bodiesOpacity) &&
-      nearEq(vis.silhouette, pv.silhouette) &&
-      nearEq(vis.internal, pv.internal) &&
-      nearEq(vis.surfaceStrength, pv.surfaceStrength) &&
-      nearEq(vis.wavesOpacity, pv.wavesOpacity) &&
-      !!vis.contrastGuide === !!pv.contrastGuide;
-    const markOk =
-      nearEq(mark.surfaceDensity, pm.surfaceDensity) &&
-      nearEq(mark.contourDensity, pm.contourDensity) &&
-      nearEq(mark.contourWidth, pm.contourWidth) &&
-      nearEq(mark.organicIrregularity, pm.organicIrregularity) &&
-      nearEq(mark.bodyDotScale, pm.bodyDotScale) &&
-      nearEq(mark.waveParticleDensity, pm.waveParticleDensity) &&
-      nearEq(mark.waveRidgeEmphasis, pm.waveRidgeEmphasis) &&
-      nearEq(mark.waveRidgeWidth, pm.waveRidgeWidth) &&
-      nearEq(mark.waveDotScale, pm.waveDotScale);
-    const contourOk =
-      contour.mode === pc.mode &&
-      nearEq(contour.edgeThreshold, pc.edgeThreshold) &&
-      nearEq(contour.contourCssPx, pc.contourCssPx) &&
-      nearEq(contour.surfaceCssPx, pc.surfaceCssPx) &&
-      contour.debug === pc.debug;
-    return visOk && markOk && contourOk;
-  }
-
-  function detectColourPresetId() {
-    const colours = getAppearanceColours();
-    for (const [id, preset] of Object.entries(COLOUR_PRESETS)) {
-      if (coloursMatchPreset(colours, preset)) return id;
-    }
-    return "custom";
-  }
-
-  function detectSettingsPresetId() {
-    const vis = getVisibilitySettings();
-    const mark = getMarkSettings();
-    const contour = getSharedContourSettings();
-    for (const [id, preset] of Object.entries(SETTINGS_PRESETS)) {
-      if (settingsMatchPreset(vis, mark, contour, preset)) return id;
-    }
-    return "custom";
-  }
-
-  function updatePresetUI() {
-    const colourId = detectColourPresetId();
-    const settingsId = detectSettingsPresetId();
-    document.querySelectorAll("[data-colour-preset]").forEach((btn) => {
-      btn.classList.toggle("is-active", btn.dataset.colourPreset === colourId);
-    });
-    document.querySelectorAll("[data-settings-preset]").forEach((btn) => {
-      btn.classList.toggle(
-        "is-active",
-        btn.dataset.settingsPreset === settingsId
-      );
-    });
-    const cStatus = document.getElementById("colour-preset-status");
-    const sStatus = document.getElementById("settings-preset-status");
-    if (cStatus) {
-      cStatus.textContent =
-        colourId === "custom"
-          ? "Custom"
-          : btnLabelForColourPreset(colourId);
-    }
-    if (sStatus) {
-      sStatus.textContent =
-        settingsId === "custom"
-          ? "Custom"
-          : btnLabelForSettingsPreset(settingsId);
-    }
-  }
-
-  function btnLabelForColourPreset(id) {
-    return (
-      {
-        "black-white": "Black & White",
-        "cream-orange": "Cream & Orange",
-        "cyan-future": "Cyan Future",
-        "sunset-blaze": "Sunset Blaze",
-      }[id] || id
-    );
-  }
-
-  function btnLabelForSettingsPreset(id) {
-    return (
-      {
-        "original-mono": "Original Mono",
-        "current-screenshot": "Current Screenshot",
-        "refined-hierarchy": "Refined Hierarchy",
-      }[id] || id
-    );
-  }
-
-  function syncColourFieldsFromState() {
-    const colours = getAppearanceColours();
-    ["background", "bodies", "waves"].forEach((key) => {
-      const swatch = document.getElementById("colour-" + key);
-      const hexField = document.getElementById("colour-" + key + "-hex");
-      if (swatch) swatch.value = colours[key];
-      if (hexField) hexField.value = colours[key];
-    });
-  }
-
-  function syncVisibilityFieldsFromState() {
-    const vis = getVisibilitySettings();
-    const set = (id, outId, value, digits) => {
-      const el = document.getElementById(id);
-      const out = document.getElementById(outId);
-      if (el) el.value = String(value);
-      if (out) out.textContent = Number(value).toFixed(digits);
-    };
-    set("vis-bodies-opacity", "vis-bodies-opacity-val", vis.bodiesOpacity, 2);
-    set("vis-silhouette", "vis-silhouette-val", vis.silhouette, 2);
-    set("vis-internal", "vis-internal-val", vis.internal, 2);
-    set("vis-surface", "vis-surface-val", vis.surfaceStrength, 2);
-    set("vis-waves-opacity", "vis-waves-opacity-val", vis.wavesOpacity, 2);
-    document.querySelectorAll("[data-contrast-guide]").forEach((btn) => {
-      const on = btn.dataset.contrastGuide === "on";
-      btn.classList.toggle("is-active", on === vis.contrastGuide);
-    });
-  }
-
-  function syncMarkFieldsFromState() {
-    const mark = getMarkSettings();
-    const set = (id, outId, value, digits) => {
-      const el = document.getElementById(id);
-      const out = document.getElementById(outId);
-      if (el) el.value = String(value);
-      if (out) out.textContent = Number(value).toFixed(digits);
-    };
-    set("mark-surface-density", "mark-surface-density-val", mark.surfaceDensity, 2);
-    set("mark-contour-density", "mark-contour-density-val", mark.contourDensity, 2);
-    set("mark-contour-width", "mark-contour-width-val", mark.contourWidth, 2);
-    set("mark-organic", "mark-organic-val", mark.organicIrregularity, 2);
-    set("mark-body-dot-scale", "mark-body-dot-scale-val", mark.bodyDotScale, 2);
-    set("mark-wave-density", "mark-wave-density-val", mark.waveParticleDensity, 2);
-    set("mark-wave-ridge", "mark-wave-ridge-val", mark.waveRidgeEmphasis, 2);
-    set("mark-wave-ridge-width", "mark-wave-ridge-width-val", mark.waveRidgeWidth, 2);
-    set("mark-wave-dot-scale", "mark-wave-dot-scale-val", mark.waveDotScale, 2);
-    updateMarkPerfWarnings();
-  }
-
-  function syncContourAppearanceFieldsFromState() {
-    const s = getSharedContourSettings();
-    const map = [
-      ["tune-proj-contour-thresh", "tune-proj-contour-thresh-val", "edgeThreshold", 2],
-      ["tune-proj-contour-csize", "tune-proj-contour-csize-val", "contourCssPx", 1],
-      ["tune-proj-contour-ssize", "tune-proj-contour-ssize-val", "surfaceCssPx", 2],
-    ];
-    map.forEach(([id, outId, key, digits]) => {
-      const el = document.getElementById(id);
-      const out = document.getElementById(outId);
-      if (el) el.value = String(s[key]);
-      if (out) out.textContent = Number(s[key]).toFixed(digits);
-    });
-    document.querySelectorAll("[data-contour-mode]").forEach((btn) => {
-      btn.classList.toggle("is-active", btn.dataset.contourMode === s.mode);
-    });
-    document.querySelectorAll("[data-contour-debug]").forEach((btn) => {
-      btn.classList.toggle("is-active", btn.dataset.contourDebug === s.debug);
-    });
-  }
-
-  function applySettingsPreset(id) {
-    const preset = SETTINGS_PRESETS[id];
-    if (!preset) return;
-    const visNext = { ...getVisibilitySettings(), ...preset.visibility };
-    const markNext = { ...preset.mark };
-    const contourNext = {
-      ...getSharedContourSettings(),
-      ...preset.contour,
-    };
-    saveVisibilitySettings(visNext);
-    applyVisibilitySettings(visNext);
-    saveMarkSettings(markNext);
-    applyMarkSettings(markNext);
-    sharedContourSettings = contourNext;
-    saveContourSettings(contourNext);
-    syncContourUniformsAll();
-    applyContourDisplayModeAll();
-    syncVisibilityFieldsFromState();
-    syncMarkFieldsFromState();
-    syncContourAppearanceFieldsFromState();
-    updateContrastGuideUI();
-    updatePresetUI();
-  }
-
-  function applyColourPreset(id) {
-    const preset = COLOUR_PRESETS[id];
-    if (!preset) return;
-    const next = {
-      background: preset.background,
-      bodies: preset.bodies,
-      waves: preset.waves,
-    };
-    saveAppearanceColours(next);
-    applyAppearanceColours(next);
-    syncColourFieldsFromState();
-    updateContrastGuideUI();
-    updatePresetUI();
-  }
-
-  function setupPresetControls() {
-    document.querySelectorAll("[data-colour-preset]").forEach((btn) => {
-      btn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        applyColourPreset(btn.dataset.colourPreset);
-      });
-    });
-    document.querySelectorAll("[data-settings-preset]").forEach((btn) => {
-      btn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        applySettingsPreset(btn.dataset.settingsPreset);
-      });
-    });
-    const loadBw = document.getElementById("load-original-bw");
-    if (loadBw) {
-      loadBw.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        applyColourPreset("black-white");
-        applySettingsPreset("original-mono");
-      });
-    }
-    updatePresetUI();
+    const normalized = normalizeHexColour(hex, appearanceColours.waves);
+    appearanceColours.waves = normalized;
+    uniforms.uWaveColor.value.set(normalized);
   }
 
   // Colour-space: THREE r160 enables ColorManagement by default. THREE.Color.set(hex)
   // stores linear working values. All custom body/ocean ShaderMaterials share that
   // uniform path (no extra per-shader sRGB encode). Renderer colour-management is
   // left unchanged so Background / Bodies / Waves stay mutually consistent.
-
-  function srgbChannelToLinear(c) {
-    const v = c / 255;
-    return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
-  }
-
-  function relativeLuminanceFromHex(hex) {
-    // Prefer CSS hex digits (sRGB) rather than Three's linear .r for diagnostic guide
-    const raw = normalizeHexColour(hex, "#000000").slice(1);
-    const r = parseInt(raw.slice(0, 2), 16);
-    const g = parseInt(raw.slice(2, 4), 16);
-    const b = parseInt(raw.slice(4, 6), 16);
-    return (
-      0.2126 * srgbChannelToLinear(r) +
-      0.7152 * srgbChannelToLinear(g) +
-      0.0722 * srgbChannelToLinear(b)
-    );
-  }
-
-  function contrastRatio(l1, l2) {
-    const a = Math.max(l1, l2);
-    const b = Math.min(l1, l2);
-    return (a + 0.05) / (b + 0.05);
-  }
-
-  function contrastStatus(ratio) {
-    if (ratio >= 3) return "Clear";
-    if (ratio >= 2) return "Marginal";
-    return "Low";
-  }
-
-  function mixHexApprox(bgHex, fgHex, alpha) {
-    const a = THREE.MathUtils.clamp(alpha, 0, 1);
-    // Blend in sRGB byte space for a simple diagnostic composite estimate
-    const bgH = normalizeHexColour(bgHex, "#000000").slice(1);
-    const fgH = normalizeHexColour(fgHex, "#000000").slice(1);
-    const mixCh = (i) => {
-      const b = parseInt(bgH.slice(i, i + 2), 16);
-      const f = parseInt(fgH.slice(i, i + 2), 16);
-      return Math.round(f * a + b * (1 - a));
-    };
-    const toHex = (n) => n.toString(16).padStart(2, "0");
-    return `#${toHex(mixCh(0))}${toHex(mixCh(2))}${toHex(mixCh(4))}`;
-  }
-
-  function updateContrastGuideUI() {
-    const panel = document.getElementById("contrast-guide-panel");
-    if (!panel) return;
-    const vis = getVisibilitySettings();
-    panel.hidden = !vis.contrastGuide;
-    if (!vis.contrastGuide) return;
-
-    const colours = getAppearanceColours();
-    const bgL = relativeLuminanceFromHex(colours.background);
-    const wavesL = relativeLuminanceFromHex(colours.waves);
-    const bodiesL = relativeLuminanceFromHex(colours.bodies);
-
-    // Effective contour mark vs background: blend with typical silhouette coverage
-    const effectiveAlpha = THREE.MathUtils.clamp(
-      vis.bodiesOpacity * vis.silhouette * 0.85,
-      0,
-      1
-    );
-    const effectiveBodiesHex = mixHexApprox(
-      colours.background,
-      colours.bodies,
-      effectiveAlpha
-    );
-    const effectiveBodiesL = relativeLuminanceFromHex(effectiveBodiesHex);
-
-    const rows = [
-      ["contrast-bodies-bg", contrastRatio(effectiveBodiesL, bgL)],
-      ["contrast-waves-bg", contrastRatio(wavesL, bgL)],
-      ["contrast-bodies-waves", contrastRatio(bodiesL, wavesL)],
-    ];
-    rows.forEach(([id, ratio]) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      const status = contrastStatus(ratio);
-      el.textContent = `${status} (${ratio.toFixed(1)}:1)`;
-      el.dataset.status = status.toLowerCase();
-    });
-  }
-
-  function setupVisibilityControls() {
-    const root = document.getElementById("appearance-visibility");
-    if (!root) return;
-
-    const syncFields = (vis) => {
-      const set = (id, outId, value, digits) => {
-        const el = document.getElementById(id);
-        const out = document.getElementById(outId);
-        if (el) el.value = String(value);
-        if (out) out.textContent = Number(value).toFixed(digits);
-      };
-      set("vis-bodies-opacity", "vis-bodies-opacity-val", vis.bodiesOpacity, 2);
-      set("vis-silhouette", "vis-silhouette-val", vis.silhouette, 2);
-      set("vis-internal", "vis-internal-val", vis.internal, 2);
-      set("vis-surface", "vis-surface-val", vis.surfaceStrength, 2);
-      set("vis-waves-opacity", "vis-waves-opacity-val", vis.wavesOpacity, 2);
-      document.querySelectorAll("[data-contrast-guide]").forEach((btn) => {
-        const on = btn.dataset.contrastGuide === "on";
-        btn.classList.toggle("is-active", on === vis.contrastGuide);
-      });
-      updateContrastGuideUI();
-    };
-
-    const bind = (id, outId, key, min, max, digits) => {
-      const el = document.getElementById(id);
-      const out = document.getElementById(outId);
-      if (!el) return;
-      el.addEventListener("input", () => {
-        const value = THREE.MathUtils.clamp(parseFloat(el.value) || min, min, max);
-        if (out) out.textContent = value.toFixed(digits);
-        const next = { ...getVisibilitySettings(), [key]: value };
-        saveVisibilitySettings(next);
-        applyVisibilitySettings(next);
-        syncFields(getVisibilitySettings());
-      });
-    };
-
-    bind("vis-bodies-opacity", "vis-bodies-opacity-val", "bodiesOpacity", 0, 1, 2);
-    bind("vis-silhouette", "vis-silhouette-val", "silhouette", 0, 1.5, 2);
-    bind("vis-internal", "vis-internal-val", "internal", 0, 1.5, 2);
-    bind("vis-surface", "vis-surface-val", "surfaceStrength", 0, 0.8, 2);
-    bind("vis-waves-opacity", "vis-waves-opacity-val", "wavesOpacity", 0, 1, 2);
-
-    document.querySelectorAll("[data-contrast-guide]").forEach((btn) => {
-      btn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const on = btn.dataset.contrastGuide === "on";
-        const next = { ...getVisibilitySettings(), contrastGuide: on };
-        saveVisibilitySettings(next);
-        applyVisibilitySettings(next);
-        syncFields(getVisibilitySettings());
-      });
-    });
-
-    const resetBtn = document.getElementById("visibility-reset");
-    if (resetBtn) {
-      resetBtn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const next = { ...VISIBILITY_ORIGINALS };
-        saveVisibilitySettings(next);
-        applyVisibilitySettings(next);
-        syncFields(next);
-      });
-    }
-
-    syncFields(getVisibilitySettings());
-  }
-
-  function updateMarkPerfWarnings() {
-    const mark = getMarkSettings();
-    const setWarn = (id, show) => {
-      const el = document.getElementById(id);
-      if (el) el.hidden = !show;
-    };
-    setWarn("mark-warn-surface", mark.surfaceDensity >= 4);
-    setWarn("mark-warn-contour", mark.contourDensity >= 4);
-    setWarn("mark-warn-wave", mark.waveParticleDensity >= 3);
-  }
-
-  function setupMarkMakingControls() {
-    const root = document.getElementById("appearance-mark-making");
-    if (!root) return;
-
-    const syncFields = (mark) => {
-      const set = (id, outId, value, digits) => {
-        const el = document.getElementById(id);
-        const out = document.getElementById(outId);
-        if (el) el.value = String(value);
-        if (out) out.textContent = Number(value).toFixed(digits);
-      };
-      set("mark-surface-density", "mark-surface-density-val", mark.surfaceDensity, 2);
-      set("mark-contour-density", "mark-contour-density-val", mark.contourDensity, 2);
-      set("mark-contour-width", "mark-contour-width-val", mark.contourWidth, 2);
-      set("mark-organic", "mark-organic-val", mark.organicIrregularity, 2);
-      set("mark-body-dot-scale", "mark-body-dot-scale-val", mark.bodyDotScale, 2);
-      set("mark-wave-density", "mark-wave-density-val", mark.waveParticleDensity, 2);
-      set("mark-wave-ridge", "mark-wave-ridge-val", mark.waveRidgeEmphasis, 2);
-      set("mark-wave-ridge-width", "mark-wave-ridge-width-val", mark.waveRidgeWidth, 2);
-      set("mark-wave-dot-scale", "mark-wave-dot-scale-val", mark.waveDotScale, 2);
-      updateMarkPerfWarnings();
-    };
-
-    const bind = (id, outId, key, min, max, digits, step) => {
-      const el = document.getElementById(id);
-      const out = document.getElementById(outId);
-      if (!el) return;
-      const commit = () => {
-        const value = THREE.MathUtils.clamp(parseFloat(el.value) || min, min, max);
-        if (out) out.textContent = value.toFixed(digits);
-        const next = { ...getMarkSettings(), [key]: value };
-        saveMarkSettings(next);
-        applyMarkSettings(next);
-        syncFields(getMarkSettings());
-      };
-      el.addEventListener("input", commit);
-      if (step) el.step = String(step);
-    };
-
-    bind("mark-surface-density", "mark-surface-density-val", "surfaceDensity", 0.25, 8, 2);
-    bind("mark-contour-density", "mark-contour-density-val", "contourDensity", 0.25, 8, 2);
-    bind("mark-contour-width", "mark-contour-width-val", "contourWidth", 0.5, 4, 2);
-    bind("mark-organic", "mark-organic-val", "organicIrregularity", 0, 1, 2);
-    bind("mark-body-dot-scale", "mark-body-dot-scale-val", "bodyDotScale", 0.25, 8, 2, 0.05);
-    bind("mark-wave-density", "mark-wave-density-val", "waveParticleDensity", 0.25, 8, 2);
-    bind("mark-wave-ridge", "mark-wave-ridge-val", "waveRidgeEmphasis", 0, 4, 2);
-    bind("mark-wave-ridge-width", "mark-wave-ridge-width-val", "waveRidgeWidth", 0.25, 4, 2);
-    bind("mark-wave-dot-scale", "mark-wave-dot-scale-val", "waveDotScale", 0.25, 8, 2, 0.05);
-
-    const resetBtn = document.getElementById("mark-reset");
-    if (resetBtn) {
-      resetBtn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const next = { ...MARK_ORIGINALS };
-        saveMarkSettings(next);
-        applyMarkSettings(next);
-        syncFields(next);
-      });
-    }
-
-    const refBtn = document.getElementById("mark-reference-texture");
-    if (refBtn) {
-      refBtn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const visNext = {
-          ...getVisibilitySettings(),
-          ...REFERENCE_TEXTURE.visibility,
-        };
-        const markNext = { ...REFERENCE_TEXTURE.mark };
-        saveVisibilitySettings(visNext);
-        applyVisibilitySettings(visNext);
-        saveMarkSettings(markNext);
-        applyMarkSettings(markNext);
-        syncFields(markNext);
-        const syncVis = (id, outId, value, digits) => {
-          const el = document.getElementById(id);
-          const out = document.getElementById(outId);
-          if (el) el.value = String(value);
-          if (out) out.textContent = Number(value).toFixed(digits);
-        };
-        syncVis("vis-bodies-opacity", "vis-bodies-opacity-val", visNext.bodiesOpacity, 2);
-        syncVis("vis-silhouette", "vis-silhouette-val", visNext.silhouette, 2);
-        syncVis("vis-internal", "vis-internal-val", visNext.internal, 2);
-        syncVis("vis-surface", "vis-surface-val", visNext.surfaceStrength, 2);
-        syncVis("vis-waves-opacity", "vis-waves-opacity-val", visNext.wavesOpacity, 2);
-      });
-    }
-
-    syncFields(getMarkSettings());
-  }
-
-  function setupColourControls() {
-    const root = document.getElementById("appearance-colours");
-    if (!root) return;
-
-    const bind = (key, swatchId, hexId) => {
-      const swatch = document.getElementById(swatchId);
-      const hexField = document.getElementById(hexId);
-      if (!swatch || !hexField) return;
-
-      const syncFields = (hex) => {
-        swatch.value = hex;
-        hexField.value = hex;
-      };
-      syncFields(appearanceColours[key]);
-
-      const commit = (raw) => {
-        const hex = normalizeHexColour(raw, appearanceColours[key]);
-        syncFields(hex);
-        const next = { ...getAppearanceColours(), [key]: hex };
-        saveAppearanceColours(next);
-        applyAppearanceColours(next);
-        updateContrastGuideUI();
-      };
-
-      swatch.addEventListener("input", () => commit(swatch.value));
-      hexField.addEventListener("input", () => {
-        const raw = hexField.value.trim();
-        if (/^#?[0-9a-fA-F]{6}$/.test(raw)) commit(raw);
-      });
-      hexField.addEventListener("change", () => commit(hexField.value));
-      hexField.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          commit(hexField.value);
-        }
-      });
-    };
-
-    bind("background", "colour-background", "colour-background-hex");
-    bind("bodies", "colour-bodies", "colour-bodies-hex");
-    bind("waves", "colour-waves", "colour-waves-hex");
-
-    const resetBtn = document.getElementById("colour-reset");
-    if (resetBtn) {
-      resetBtn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const next = { ...COLOUR_ORIGINALS };
-        saveAppearanceColours(next);
-        applyAppearanceColours(next);
-        ["background", "bodies", "waves"].forEach((key) => {
-          const swatch = document.getElementById(`colour-${key}`);
-          const hexField = document.getElementById(`colour-${key}-hex`);
-          if (swatch) swatch.value = next[key];
-          if (hexField) hexField.value = next[key];
-        });
-        updateContrastGuideUI();
-      });
-    }
-
-    const refBtn = document.getElementById("colour-reference-light");
-    if (refBtn) {
-      refBtn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const next = { ...REFERENCE_LIGHT_COLOURS };
-        saveAppearanceColours(next);
-        applyAppearanceColours(next);
-        ["background", "bodies", "waves"].forEach((key) => {
-          const swatch = document.getElementById(`colour-${key}`);
-          const hexField = document.getElementById(`colour-${key}-hex`);
-          if (swatch) swatch.value = next[key];
-          if (hexField) hexField.value = next[key];
-        });
-        updateContrastGuideUI();
-      });
-    }
-  }
 
   function seededUnitRandom(seed) {
     let a = seed >>> 0;
@@ -2016,7 +881,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     uThreshold: { value: 0.45 },
     uStippleSpacing: { value: 2.2 },
     uContourCssPx: { value: 0.9 },
-    uContourColor: { value: new THREE.Color(CONTOUR_DEFAULTS.contourColor) },
+    uContourColor: { value: new THREE.Color(appearanceColours.bodies) },
     uScreenRadius: { value: 80 },
     uDebug: { value: 0 },
     uBodiesOpacity: { value: 1 },
@@ -2027,19 +892,18 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     uTime: uniforms.uTime,
     uSplashCenters: uniforms.uSplashCenters,
     uSplashData: uniforms.uSplashData,
+    uActiveSplashCount: uniforms.uActiveSplashCount,
     uWaveClipBias: { value: WAVE_CLIP_BIAS },
     uInvProjectionMatrix: { value: new THREE.Matrix4() },
     uInvViewMatrix: { value: new THREE.Matrix4() },
     uProjX: { value: 1 },
     uProjY: { value: 1 },
-    uCamMode: { value: 0 }, // 0 perspective, 1 orthographic
+    uCamMode: { value: 0 }, // always perspective in production
     uWaterlineBand: { value: 0.55 },
   };
 
-  // Apply appearance colours once composite uniforms exist (look matches pre-feature)
-  applyAppearanceColours(appearanceColours);
-  applyVisibilitySettings(appearanceVisibility);
-  applyMarkSettings(appearanceMark);
+  // Bake FINAL_LOOK into uniforms once materials exist (function-hoisted below).
+  bakeFinalLook();
 
   const contourCompositeMaterial = new THREE.ShaderMaterial({
     uniforms: contourCompositeUniforms,
@@ -2223,11 +1087,16 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         float cEdge = clamp(cSil * silW + cInt * intW, 0.0, 1.0);
 
         // Contour width: dilate edge band in screen space (multi-row marks, not glow)
+        // Opt 4: r>=2 is a no-op at locked look. Proof with contourWidth=0.9,
+        // contourDensity=1.95, stippleSpacing=2.2, dpr<=2:
+        //   spacing=(2.2/1.95)*dpr; stepPx=max(spacing*0.55,1)>=1;
+        //   widthPx=0.9*dpr <= 1.8; for r>=2, rad>=2 > widthPx*1.05 (<=1.89) so step=0.
         float widthPx = max(uContourWidth, 0.5) * uPixelRatio;
         float dilate = 0.0;
         float stepPx = max(spacing * 0.55, 1.0);
-        for (int r = 1; r <= 4; r++) {
-          float rad = float(r) * stepPx;
+        {
+          // r = 1 only (see proof above)
+          float rad = stepPx;
           float fall = (1.0 - smoothstep(0.0, widthPx, rad)) * step(rad, widthPx * 1.05);
           for (int kDir = 0; kDir < 8; kDir++) {
             float ang = float(kDir) * 0.785398163;
@@ -2326,6 +1195,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         shader.uniforms.uTime = uniforms.uTime;
         shader.uniforms.uSplashCenters = uniforms.uSplashCenters;
         shader.uniforms.uSplashData = uniforms.uSplashData;
+        shader.uniforms.uActiveSplashCount = uniforms.uActiveSplashCount;
         shader.uniforms.uWaveClipBias = { value: WAVE_CLIP_BIAS };
         Object.assign(shader.uniforms, makeWaterDepthUniforms());
         shader.vertexShader =
@@ -2388,12 +1258,12 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         uColor: { value: new THREE.Color(settings.surfaceColor) },
         uStrength: { value: settings.surfaceStrength },
         uDensity: { value: settings.surfaceDensity },
-        uMarkSurfaceDensity: { value: 1 },
+        uMarkSurfaceDensity: { value: FINAL_LOOK.mark.surfaceDensity },
         uLightDir: { value: new THREE.Vector3(0.4, 0.85, 0.35).normalize() },
         uScreenRadius: { value: 80 },
-        uBodiesOpacity: { value: 1 },
-        uBodyDotScale: { value: 1 },
-        uOrganicIrregularity: { value: 0 },
+        uBodiesOpacity: { value: FINAL_LOOK.visibility.bodiesOpacity },
+        uBodyDotScale: { value: FINAL_LOOK.mark.bodyDotScale },
+        uOrganicIrregularity: { value: FINAL_LOOK.mark.organicIrregularity },
         uSurfaceMasterScale: {
           value: (CONTOUR_SURFACE_BASE_FRAC * CONTOUR_SURFACE_BASE) / CONTOUR_SURFACE_COUNT,
         },
@@ -2605,46 +1475,54 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       nrmArr[o + 2] = tri.nz;
       rankArr[i] = rnd();
     }
-    return { posArr, nrmArr, rankArr, count };
+
+    // Opt 3: keep full seed sequence, then drop ranks that can never pass GPU keep.
+    // See SURFACE_RANK_KEEP_MAX proof above. Preserve original aRank values (no renorm).
+    let kept = 0;
+    for (let i = 0; i < count; i++) {
+      if (rankArr[i] > SURFACE_RANK_KEEP_MAX) continue;
+      if (kept !== i) {
+        const o = i * 3;
+        const d = kept * 3;
+        posArr[d] = posArr[o];
+        posArr[d + 1] = posArr[o + 1];
+        posArr[d + 2] = posArr[o + 2];
+        nrmArr[d] = nrmArr[o];
+        nrmArr[d + 1] = nrmArr[o + 1];
+        nrmArr[d + 2] = nrmArr[o + 2];
+        rankArr[kept] = rankArr[i];
+      }
+      kept++;
+    }
+    return {
+      posArr: posArr.slice(0, kept * 3),
+      nrmArr: nrmArr.slice(0, kept * 3),
+      rankArr: rankArr.slice(0, kept),
+      count: kept,
+    };
   }
 
+  const _screenCenter = new THREE.Vector3();
   function estimateProjectsScreenRadius(state, cam) {
     if (!state?.contourLocalCenter) return 80;
     state.group.updateWorldMatrix(true, false);
-    const center = state.contourLocalCenter
-      .clone()
-      .applyMatrix4(state.group.matrixWorld);
+    _screenCenter.copy(state.contourLocalCenter).applyMatrix4(state.group.matrixWorld);
     const radius = state.contourLocalRadius * Math.abs(state.scale);
     const h = Math.max(window.innerHeight, 1);
-    if (cam.isPerspectiveCamera) {
-      const dist = Math.max(cam.position.distanceTo(center), 0.05);
-      const vFov = (cam.fov * Math.PI) / 180;
-      const worldH = 2 * Math.tan(vFov * 0.5) * dist;
-      return (radius / worldH) * h;
-    }
-    const halfH = Math.max((cam.top - cam.bottom) * 0.5, 1e-4);
-    return (radius / halfH) * (h * 0.5);
+    const dist = Math.max(cam.position.distanceTo(_screenCenter), 0.05);
+    const vFov = (cam.fov * Math.PI) / 180;
+    const worldH = 2 * Math.tan(vFov * 0.5) * dist;
+    return (radius / worldH) * h;
   }
 
   function applyContourDisplayMode(state) {
     if (!state?.solidMeshes) return;
-    const s = getSharedContourSettings();
-    const contour = s.mode === "contour";
-    const debug = s.debug || "final";
-
+    // Locked FINAL_LOOK: always contour + final
     state.solidMeshes.forEach((entry) => {
-      if (contour) {
-        entry.mesh.material = depthOnlyMaterial;
-        entry.mesh.visible = true;
-      } else {
-        entry.mesh.material = entry.waveClipMaterial || entry.originalMaterial;
-        entry.mesh.visible = true;
-      }
+      entry.mesh.material = depthOnlyMaterial;
+      entry.mesh.visible = true;
     });
-
-    if (state.surfacePoints) {
-      state.surfacePoints.visible = contour && debug === "final";
-    }
+    if (state.surfacePoints) state.surfacePoints.visible = true;
   }
 
   function applyContourDisplayModeAll() {
@@ -2653,9 +1531,9 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   function syncContourUniforms(state) {
     const s = getSharedContourSettings();
-    const vis = getVisibilitySettings();
-    const mark = getMarkSettings();
-    const bodiesHex = getAppearanceColours().bodies;
+    const vis = FINAL_LOOK.visibility;
+    const mark = FINAL_LOOK.mark;
+    const bodiesHex = appearanceColours.bodies;
     const dotScale = mark.bodyDotScale;
 
     contourCompositeUniforms.uSilhouette.value = vis.silhouette;
@@ -2669,14 +1547,11 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     contourCompositeUniforms.uContourWidth.value = mark.contourWidth;
     contourCompositeUniforms.uOrganicIrregularity.value = mark.organicIrregularity;
     contourCompositeUniforms.uBodyDotScale.value = dotScale;
-    const debugMap = { final: 0, depth: 1, normals: 2, edges: 3 };
-    contourCompositeUniforms.uDebug.value = debugMap[s.debug] ?? 0;
+    contourCompositeUniforms.uDebug.value = 0; // final
 
     uniforms.uWaveOpacity.value = vis.wavesOpacity;
     uniforms.uWaveDotScale.value = mark.waveDotScale;
     uniforms.uWaveParticleDensity.value = mark.waveParticleDensity;
-    uniforms.uWaveRidgeEmphasis.value = mark.waveRidgeEmphasis;
-    uniforms.uWaveRidgeWidth.value = mark.waveRidgeWidth;
     uniforms.uOceanMasterMult.value = OCEAN_MASTER_MULT;
 
     if (state?.surfaceMaterial) {
@@ -2692,61 +1567,12 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     }
   }
 
-  function applyVisibilitySettings(settings) {
-    appearanceVisibility = {
-      bodiesOpacity: THREE.MathUtils.clamp(Number(settings.bodiesOpacity) ?? 1, 0, 1),
-      silhouette: THREE.MathUtils.clamp(Number(settings.silhouette) ?? 0.9, 0, 1.5),
-      internal: THREE.MathUtils.clamp(Number(settings.internal) ?? 0.55, 0, 1.5),
-      surfaceStrength: THREE.MathUtils.clamp(
-        Number(settings.surfaceStrength) ?? 0.25,
-        0,
-        0.8
-      ),
-      wavesOpacity: THREE.MathUtils.clamp(Number(settings.wavesOpacity) ?? 1, 0, 1),
-      contrastGuide: settings.contrastGuide === true,
-    };
-
-    const contour = getSharedContourSettings();
-    sharedContourSettings = {
-      ...contour,
-      silhouette: appearanceVisibility.silhouette,
-      internal: appearanceVisibility.internal,
-      surfaceStrength: appearanceVisibility.surfaceStrength,
-    };
-    saveContourSettings(sharedContourSettings);
-
+  function bakeFinalLook() {
+    applyBackgroundColour(appearanceColours.background);
+    applyBodiesColour(appearanceColours.bodies);
+    applyWavesColour(appearanceColours.waves);
     syncContourUniformsAll();
-    updateContrastGuideUI();
-    if (typeof updatePresetUI === "function") updatePresetUI();
-  }
-
-  function applyMarkSettings(settings) {
-    appearanceMark = {
-      surfaceDensity: THREE.MathUtils.clamp(Number(settings.surfaceDensity) ?? 1, 0.25, 8),
-      contourDensity: THREE.MathUtils.clamp(Number(settings.contourDensity) ?? 1, 0.25, 8),
-      contourWidth: THREE.MathUtils.clamp(Number(settings.contourWidth) ?? 0.9, 0.5, 4),
-      organicIrregularity: THREE.MathUtils.clamp(
-        Number(settings.organicIrregularity) ?? 0,
-        0,
-        1
-      ),
-      bodyDotScale: THREE.MathUtils.clamp(Number(settings.bodyDotScale) ?? 1, 0.25, 8),
-      waveParticleDensity: THREE.MathUtils.clamp(
-        Number(settings.waveParticleDensity) ?? 1,
-        0.25,
-        8
-      ),
-      waveRidgeEmphasis: THREE.MathUtils.clamp(
-        Number(settings.waveRidgeEmphasis) ?? 0,
-        0,
-        4
-      ),
-      waveRidgeWidth: THREE.MathUtils.clamp(Number(settings.waveRidgeWidth) ?? 1, 0.25, 4),
-      waveDotScale: THREE.MathUtils.clamp(Number(settings.waveDotScale) ?? 1, 0.25, 8),
-    };
-    syncContourUniformsAll();
-    updateMarkPerfWarnings();
-    if (typeof updatePresetUI === "function") updatePresetUI();
+    applyContourDisplayModeAll();
   }
 
   function syncContourUniformsAll() {
@@ -2812,19 +1638,15 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
     applyContourDisplayMode(state);
     syncContourUniforms(state);
-    applyBodiesColour(getAppearanceColours().bodies);
-    console.log(
-      `[${state.id} contour] surface dots=${sampled.count}, solid meshes=${state.solidMeshes.length}`
-    );
+    applyBodiesColour(appearanceColours.bodies);
   }
 
   function renderContourPass() {
-    const settings = getSharedContourSettings();
-    if (settings.mode !== "contour" || !contourModels.length) return false;
+    if (!contourModels.length) return false;
 
     let maxScreenR = 0;
     contourModels.forEach((state) => {
-      const screenR = estimateProjectsScreenRadius(state, activeCamera);
+      const screenR = estimateProjectsScreenRadius(state, camera);
       maxScreenR = Math.max(maxScreenR, screenR);
       if (state.surfaceMaterial) {
         state.surfaceMaterial.uniforms.uScreenRadius.value = screenR;
@@ -2834,25 +1656,20 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     // (and peers at similar depth) keep the accepted silhouette behaviour.
     contourCompositeUniforms.uScreenRadius.value = maxScreenR;
 
-    const prevMask = activeCamera.layers.mask;
-    activeCamera.layers.set(CONTOUR_LAYER);
+    const prevMask = camera.layers.mask;
+    camera.layers.set(CONTOUR_LAYER);
     const prevOverride = scene.overrideMaterial;
     scene.overrideMaterial = contourCaptureMaterial;
 
     renderer.setRenderTarget(contourRT);
     renderer.setClearColor(0x000000, 0);
     renderer.clear(true, true, true);
-    renderer.render(scene, activeCamera);
+    renderer.render(scene, camera);
 
     scene.overrideMaterial = prevOverride;
-    activeCamera.layers.mask = prevMask;
+    camera.layers.mask = prevMask;
     renderer.setRenderTarget(null);
-    // Restored by applyBackgroundColour each frame / after pass
-    if (typeof applyBackgroundColour === "function") {
-      applyBackgroundColour(getAppearanceColours().background);
-    } else {
-      renderer.setClearColor(0x000000, 1);
-    }
+    restoreBackgroundClearColor();
     return true;
   }
 
@@ -2942,7 +1759,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         state.halfHeight = Math.max(0.05, (posedBox.max.y - posedBox.min.y) * 0.5);
         group.scale.setScalar(prevScale);
 
-    if (config.attachContourStipple) {
+        if (config.attachContourStipple) {
           attachContourStipple(state, model);
         }
 
@@ -2955,8 +1772,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
           state.halfHeight * state.scale * (1 - 2 * state.immersionFraction) -
           state.immersionOffset;
         group.position.y = state.bobY;
-
-        console.log(`[${config.id}] GLB loaded and added to scene:`, config.url);
       },
       undefined,
       (error) => {
@@ -3037,91 +1852,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     },
   });
 
-  function saveCompositionFromModels() {
-    const payload = { projects: null, about: null, interests: null };
-    floatingModels.forEach((state) => {
-      payload[state.id] = {
-        x: state.x,
-        z: state.z,
-        scale: state.scale,
-        immersion: state.immersionFraction,
-        immersionOffset: state.immersionOffset,
-        bob: state.bobResponsiveness,
-        maxTiltDeg: (state.maxTilt * 180) / Math.PI,
-        rotXDeg: state.rotXDeg,
-        rotYDeg: state.rotYDeg,
-        rotZDeg: state.rotZDeg,
-      };
-    });
-    localStorage.setItem(COMPOSITION_STORAGE_KEY, JSON.stringify(payload));
-  }
-
-  function syncTuneControlsFromState(state) {
-    const prefix = `tune-${state.id}`;
-    const setPair = (id, value, format) => {
-      const input = document.getElementById(id);
-      const valueEl = document.getElementById(`${id}-val`);
-      if (input) input.value = String(value);
-      if (valueEl) valueEl.textContent = format(value);
-    };
-    setPair(`${prefix}-x`, state.x, (v) => Number(v).toFixed(2));
-    setPair(`${prefix}-z`, state.z, (v) => Number(v).toFixed(2));
-    setPair(`${prefix}-scale`, state.scale, (v) => Number(v).toFixed(2));
-    setPair(`${prefix}-immersion`, state.immersionFraction, (v) => Number(v).toFixed(2));
-    setPair(`${prefix}-bob`, state.bobResponsiveness, (v) => Number(v).toFixed(2));
-    setPair(`${prefix}-tilt`, (state.maxTilt * 180) / Math.PI, (v) => Number(v).toFixed(1));
-    setPair(`${prefix}-rot-x`, state.rotXDeg, (v) => Number(v).toFixed(0));
-    setPair(`${prefix}-rot-y`, state.rotYDeg, (v) => Number(v).toFixed(0));
-    setPair(`${prefix}-rot-z`, state.rotZDeg, (v) => Number(v).toFixed(0));
-  }
-
-  function applyCompositionPreset(preset) {
-    floatingModels.forEach((state) => {
-      const cfg = preset[state.id];
-      if (!cfg) return;
-      state.x = cfg.x;
-      state.z = cfg.z;
-      state.scale = cfg.scale;
-      state.immersionFraction = cfg.immersion;
-      state.immersionOffset = cfg.immersionOffset;
-      state.bobResponsiveness = cfg.bob;
-      state.maxTilt = (cfg.maxTiltDeg * Math.PI) / 180;
-      state.rotXDeg = cfg.rotXDeg;
-      state.rotYDeg = cfg.rotYDeg;
-      state.rotZDeg = cfg.rotZDeg;
-      // Keep Reset rotation aligned with this composition pose
-      state.initialRotXDeg = cfg.rotXDeg;
-      state.initialRotYDeg = cfg.rotYDeg;
-      state.initialRotZDeg = cfg.rotZDeg;
-      applyFloatingModelXZScale(state);
-      applyFloatingModelOrientation(state);
-      syncTuneControlsFromState(state);
-    });
-    saveCompositionFromModels();
-  }
-
-  function applyFloatingModelXZScale(state) {
-    state.group.position.x = state.x;
-    state.group.position.z = state.z;
-    state.group.scale.setScalar(state.scale);
-  }
-
-  // Manual orientation lives only on the inner pose group (degrees → radians)
-  function applyFloatingModelOrientation(state) {
-    state.pose.rotation.set(
-      (state.rotXDeg * Math.PI) / 180,
-      (state.rotYDeg * Math.PI) / 180,
-      (state.rotZDeg * Math.PI) / 180
-    );
-  }
-
-  function resetFloatingModelOrientation(state) {
-    state.rotXDeg = state.initialRotXDeg;
-    state.rotYDeg = state.initialRotYDeg;
-    state.rotZDeg = state.initialRotZDeg;
-    applyFloatingModelOrientation(state);
-  }
-
   // Each model samples the shared ocean height at its own X/Z (same as GPU waveHeight)
   function updateFloatingModels(time) {
     const dt = Math.min(Math.max(time - lastFloatTime, 0), 0.05);
@@ -3131,8 +1861,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     for (let i = 0; i < floatingModels.length; i++) {
       const state = floatingModels[i];
       if (!state.ready) continue;
-
-      applyFloatingModelXZScale(state);
 
       const x = state.x;
       const z = state.z;
@@ -3175,226 +1903,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     }
   }
 
-  // ─── Temporary 3-column tune dock (easy to delete later) ─────────────
-  function setupFloatTuneDock() {
-    const dock = document.getElementById("float-tune-dock");
-    const chrome = document.querySelector(".float-tune-chrome");
-    const toggle = document.getElementById("float-tune-toggle");
-    const viewBar = document.getElementById("view-bar");
-    if (!dock) return;
-
-    const stopOceanGestures = (el) => {
-      if (!el) return;
-      [
-        "pointerdown",
-        "pointerup",
-        "pointermove",
-        "click",
-        "dblclick",
-        "wheel",
-        "touchstart",
-        "touchmove",
-        "touchend",
-        "contextmenu",
-      ].forEach((type) => {
-        el.addEventListener(
-          type,
-          (event) => {
-            event.stopPropagation();
-          },
-          { passive: type.startsWith("touch") ? false : undefined }
-        );
-      });
-    };
-    stopOceanGestures(chrome);
-    stopOceanGestures(dock);
-    stopOceanGestures(viewBar);
-    stopOceanGestures(toggle);
-
-    if (toggle && chrome) {
-      toggle.addEventListener("click", () => {
-        const hidden = chrome.classList.toggle("is-hidden");
-        toggle.textContent = hidden ? "Show Tune" : "Hide Tune";
-        toggle.setAttribute("aria-pressed", hidden ? "true" : "false");
-      });
-    }
-
-    document.querySelectorAll(".view-btn").forEach((btn) => {
-      btn.addEventListener("click", () => setActiveView(btn.dataset.view));
-    });
-    const fitBtn = document.getElementById("view-fit-all");
-    if (fitBtn) fitBtn.addEventListener("click", () => fitTopToAllModels());
-    const resetTopBtn = document.getElementById("view-reset-top");
-    if (resetTopBtn) resetTopBtn.addEventListener("click", () => resetTopView());
-    const zoomSlider = document.getElementById("view-top-zoom");
-    if (zoomSlider) {
-      syncTopZoomSlider();
-      zoomSlider.addEventListener("input", () => {
-        const pct = parseFloat(zoomSlider.value);
-        if (!Number.isFinite(pct)) return;
-        setTopHalfExtentFromZoomSlider(pct);
-        const out = document.getElementById("view-top-zoom-val");
-        if (out) out.textContent = String(Math.round(pct));
-      });
-    }
-
-    floatingModels.forEach((state) => {
-      const bind = (key, inputId, format = (v) => v.toFixed(2), fromInput = (v) => v) => {
-        const input = document.getElementById(inputId);
-        const valueEl = document.getElementById(`${inputId}-val`);
-        if (!input) return;
-        const display = fromInput(state[key]);
-        input.value = String(display);
-        if (valueEl) valueEl.textContent = format(display);
-        input.addEventListener("input", () => {
-          const raw = parseFloat(input.value);
-          if (!Number.isFinite(raw)) return;
-          if (key === "maxTilt") {
-            state[key] = (raw * Math.PI) / 180;
-          } else {
-            state[key] = raw;
-          }
-          if (valueEl) valueEl.textContent = format(raw);
-          applyFloatingModelXZScale(state);
-          if (key === "rotXDeg" || key === "rotYDeg" || key === "rotZDeg") {
-            applyFloatingModelOrientation(state);
-          }
-          saveCompositionFromModels();
-        });
-      };
-
-      const prefix = `tune-${state.id}`;
-      bind("x", `${prefix}-x`);
-      bind("z", `${prefix}-z`);
-      bind("scale", `${prefix}-scale`);
-      bind("immersionFraction", `${prefix}-immersion`);
-      bind("bobResponsiveness", `${prefix}-bob`);
-      bind(
-        "maxTilt",
-        `${prefix}-tilt`,
-        (v) => Number(v).toFixed(1),
-        (radians) => (radians * 180) / Math.PI
-      );
-      bind("rotXDeg", `${prefix}-rot-x`, (v) => Number(v).toFixed(0));
-      bind("rotYDeg", `${prefix}-rot-y`, (v) => Number(v).toFixed(0));
-      bind("rotZDeg", `${prefix}-rot-z`, (v) => Number(v).toFixed(0));
-
-      const resetBtn = document.getElementById(`${prefix}-rot-reset`);
-      if (resetBtn) {
-        resetBtn.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          resetFloatingModelOrientation(state);
-          ["rot-x", "rot-y", "rot-z"].forEach((axis) => {
-            const input = document.getElementById(`${prefix}-${axis}`);
-            const valueEl = document.getElementById(`${prefix}-${axis}-val`);
-            const deg =
-              axis === "rot-x"
-                ? state.rotXDeg
-                : axis === "rot-y"
-                  ? state.rotYDeg
-                  : state.rotZDeg;
-            if (input) input.value = String(deg);
-            if (valueEl) valueEl.textContent = Number(deg).toFixed(0);
-          });
-          saveCompositionFromModels();
-        });
-      }
-    });
-
-    const restoreBtn = document.getElementById("tune-restore-composition");
-    if (restoreBtn) {
-      restoreBtn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        applyCompositionPreset(cloneComposition(FINAL_COMPOSITION));
-      });
-    }
-
-    setupContourStippleControls();
-    setupColourControls();
-    setupVisibilityControls();
-    setupMarkMakingControls();
-    setupPresetControls();
-  }
-
-  function setupContourStippleControls() {
-    const applyAppearance = (settings) => {
-      sharedContourSettings = settings;
-      contourModels.forEach((state) => {
-        state.contourSettings = settings;
-      });
-      syncContourUniformsAll();
-      applyContourDisplayModeAll();
-      if (typeof updatePresetUI === "function") updatePresetUI();
-    };
-
-    const syncMode = (mode) => {
-      document.querySelectorAll("[data-contour-mode]").forEach((btn) => {
-        btn.classList.toggle("is-active", btn.dataset.contourMode === mode);
-      });
-    };
-
-    const syncDebug = (debug) => {
-      document.querySelectorAll("[data-contour-debug]").forEach((btn) => {
-        btn.classList.toggle("is-active", btn.dataset.contourDebug === debug);
-      });
-    };
-
-    const settings = getSharedContourSettings();
-    const map = [
-      ["tune-proj-contour-thresh", "tune-proj-contour-thresh-val", "edgeThreshold", 0.05, 1.5, 2],
-      ["tune-proj-contour-csize", "tune-proj-contour-csize-val", "contourCssPx", 0.5, 1.3, 1],
-      ["tune-proj-contour-ssize", "tune-proj-contour-ssize-val", "surfaceCssPx", 0.4, 0.9, 2],
-    ];
-
-    map.forEach(([id, outId, key, min, max, digits]) => {
-      const el = document.getElementById(id);
-      const out = document.getElementById(outId);
-      if (!el) return;
-      el.value = String(settings[key]);
-      if (out) out.textContent = Number(settings[key]).toFixed(digits);
-      el.addEventListener("input", () => {
-        const value = THREE.MathUtils.clamp(parseFloat(el.value) || min, min, max);
-        if (out) out.textContent = value.toFixed(digits);
-        const next = { ...getSharedContourSettings(), [key]: value };
-        saveContourSettings(next);
-        applyAppearance(next);
-      });
-    });
-
-    // Contour/surface colour pickers removed — global COLOURS.Bodies owns hue
-
-    syncMode(settings.mode);
-    syncDebug(settings.debug);
-
-    document.querySelectorAll("[data-contour-mode]").forEach((btn) => {
-      btn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const mode = btn.dataset.contourMode === "solid" ? "solid" : "contour";
-        const next = { ...getSharedContourSettings(), mode };
-        saveContourSettings(next);
-        syncMode(mode);
-        applyAppearance(next);
-      });
-    });
-
-    document.querySelectorAll("[data-contour-debug]").forEach((btn) => {
-      btn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const debug = btn.dataset.contourDebug || "final";
-        const next = { ...getSharedContourSettings(), debug };
-        saveContourSettings(next);
-        syncDebug(debug);
-        applyAppearance(next);
-      });
-    });
-  }
-
-  setupFloatTuneDock();
-
   // Invisible circular disc for raycasting against the ocean footprint
   const hitPlane = new THREE.Mesh(
     new THREE.CircleGeometry(OCEAN_RADIUS, 96),
@@ -3435,8 +1943,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         splashData[i * 4 + 3] = 1;
       }
     }
+    uniforms.uActiveSplashCount.value = activeSplashes.length;
   }
 
+  const _oceanHit = new THREE.Vector3();
   function getOceanPoint(clientX, clientY) {
     pointer.x = (clientX / window.innerWidth) * 2 - 1;
     pointer.y = -(clientY / window.innerHeight) * 2 + 1;
@@ -3448,24 +1958,26 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     const p = hits[0].point;
     const time = uniforms.uTime.value;
     const y = sampleWaveHeight(p.x, p.z, time) + sampleSplashHeight(p.x, p.z, time, activeSplashes);
-    return new THREE.Vector3(p.x, y, p.z);
+    return _oceanHit.set(p.x, y, p.z);
   }
 
+  const _focusOffset = new THREE.Vector3();
   function focusOnPoint(point) {
     cameraState.targetLookAt.set(point.x, Math.max(point.y, 0.3), point.z);
 
-    // Keep a cinematic offset: slightly elevated, behind the look target toward camera side
-    const offset = new THREE.Vector3()
+    // Keep a cinematic offset: elevated, behind the look target toward camera side
+    _focusOffset
       .subVectors(cameraState.position, cameraState.lookAt)
       .normalize()
       .multiplyScalar(22);
 
     // Soft lateral bias toward the clicked X so the pan feels intentional
-    offset.x += (point.x - cameraState.lookAt.x) * 0.35;
-    offset.y = 6.5 + Math.max(point.y, 0) * 0.35;
-    offset.z = Math.max(offset.z, 14);
+    _focusOffset.x += (point.x - cameraState.lookAt.x) * 0.35;
+    // Prefer a modest elevated close-focus (within NAV pitch limits after clamp)
+    _focusOffset.y = Math.max(_focusOffset.y, 7.5 + Math.max(point.y, 0) * 0.35);
+    _focusOffset.z = Math.max(_focusOffset.z, 14);
 
-    cameraState.targetPosition.copy(point).add(offset);
+    cameraState.targetPosition.copy(point).add(_focusOffset);
     cameraState.targetPosition.y = Math.max(cameraState.targetPosition.y, 5.5);
     clampNavigation();
   }
@@ -3476,15 +1988,23 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   const _zoomOffset = new THREE.Vector3();
   const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
-  // Stay near the wave disk — zoom-out capped at 2× the plane radius (center → perimeter)
+  // Stay near the wave disk — zoom-out capped at 2× the plane radius (center → perimeter).
+  // Height / pitch expanded just enough for the centred elevated hero pose (~14.5°)
+  // while still blocking top-down, underwater, and edge-of-disk views.
   const NAV_BOUNDS = {
     maxLookRadius: OCEAN_RADIUS * 0.82,
     minDist: 9,
-    maxDist: OCEAN_RADIUS * 2,
-    maxCameraRadius: OCEAN_RADIUS * 2,
+    maxDist: OCEAN_RADIUS * 2.4,
+    // Allows portrait pull-back of the hero pose without hitting the disk rim clamp.
+    maxCameraRadius: OCEAN_RADIUS * 2.4,
     minHeight: 4.5,
-    maxHeight: 18,
+    // High enough for portrait pull-back at ~14.5° pitch; top-down still blocked by maxPitchDeg.
+    maxHeight: 56,
+    minPitchDeg: 6,
+    maxPitchDeg: 22,
   };
+  const NAV_MIN_PITCH = (NAV_BOUNDS.minPitchDeg * Math.PI) / 180;
+  const NAV_MAX_PITCH = (NAV_BOUNDS.maxPitchDeg * Math.PI) / 180;
 
   function clampLookTarget() {
     const look = cameraState.targetLookAt;
@@ -3512,15 +2032,43 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     pos.y = THREE.MathUtils.clamp(pos.y, NAV_BOUNDS.minHeight, NAV_BOUNDS.maxHeight);
   }
 
+  function clampCameraPitch() {
+    // Keep a cinematic downward pitch — no dive, no overhead editor angle.
+    _zoomOffset.subVectors(cameraState.targetPosition, cameraState.targetLookAt);
+    const horiz = Math.sqrt(
+      _zoomOffset.x * _zoomOffset.x + _zoomOffset.z * _zoomOffset.z
+    );
+    if (horiz < 1e-4) {
+      _zoomOffset.set(0, 6, 18);
+      cameraState.targetPosition.copy(cameraState.targetLookAt).add(_zoomOffset);
+      return;
+    }
+    const dist = _zoomOffset.length();
+    let pitch = Math.atan2(_zoomOffset.y, horiz);
+    pitch = THREE.MathUtils.clamp(pitch, NAV_MIN_PITCH, NAV_MAX_PITCH);
+    const newHoriz = dist * Math.cos(pitch);
+    const newY = dist * Math.sin(pitch);
+    const scale = newHoriz / horiz;
+    _zoomOffset.x *= scale;
+    _zoomOffset.z *= scale;
+    _zoomOffset.y = newY;
+    cameraState.targetPosition.copy(cameraState.targetLookAt).add(_zoomOffset);
+  }
+
   function clampCameraDistance() {
     _zoomOffset.subVectors(cameraState.targetPosition, cameraState.targetLookAt);
     const dist = _zoomOffset.length();
     if (dist < 1e-4) {
-      _zoomOffset.set(0, 6, 18);
+      _zoomOffset.set(
+        HERO_POSITION.x - HERO_LOOK_AT.x,
+        HERO_POSITION.y - HERO_LOOK_AT.y,
+        HERO_POSITION.z - HERO_LOOK_AT.z
+      );
     }
     const clamped = THREE.MathUtils.clamp(dist, NAV_BOUNDS.minDist, NAV_BOUNDS.maxDist);
     _zoomOffset.setLength(clamped);
     cameraState.targetPosition.copy(cameraState.targetLookAt).add(_zoomOffset);
+    clampCameraPitch();
     clampCameraToPlane();
   }
 
@@ -3528,6 +2076,13 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     clampLookTarget();
     clampCameraDistance();
   }
+
+  // Ensure the load pose sits inside bounds (same values — no visible snap).
+  clampNavigation();
+  cameraState.position.copy(cameraState.targetPosition);
+  cameraState.lookAt.copy(cameraState.targetLookAt);
+  camera.position.copy(cameraState.position);
+  camera.lookAt(cameraState.lookAt);
 
   function panCamera(deltaX, deltaY) {
     const dist = cameraState.targetPosition.distanceTo(cameraState.targetLookAt);
@@ -3569,30 +2124,11 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     clampNavigation();
   }
 
-  // Trackpad / wheel: perspective nav, or Top pan/zoom
+  // Trackpad / wheel: pan (two-finger) or zoom (pinch / ctrl+wheel)
   canvas.addEventListener(
     "wheel",
     (event) => {
       event.preventDefault();
-      if (activeView === "top") {
-        if (event.ctrlKey) {
-          topView.halfExtent *= Math.exp(event.deltaY * 0.0025);
-          topView.halfExtent = THREE.MathUtils.clamp(
-            topView.halfExtent,
-            topView.minHalfExtent,
-            topView.maxHalfExtent
-          );
-          updateTopCameraFrustum();
-          syncTopZoomSlider();
-        } else {
-          const worldPerPixel = (2 * topView.halfExtent) / Math.max(window.innerHeight, 1);
-          // Match ortho mapping: screen right = +X, screen down = +Z
-          topView.centerX += event.deltaX * worldPerPixel;
-          topView.centerZ += event.deltaY * worldPerPixel;
-          updateTopCameraFrustum();
-        }
-        return;
-      }
       if (event.ctrlKey) {
         zoomCamera(event.deltaY);
       } else {
@@ -3636,18 +2172,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     lastSplash: null,
   };
 
-  // Top-view pan via right-click drag (does not move models)
-  const topPanState = {
-    active: false,
-    pointerId: null,
-    lastX: 0,
-    lastY: 0,
-  };
-
-  canvas.addEventListener("contextmenu", (event) => {
-    if (activeView === "top") event.preventDefault();
-  });
-
   function spawnTrailSplash(point, speed) {
     const boost = Math.min(speed / 40, 1.25);
     spawnSplash(point, {
@@ -3677,27 +2201,13 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     const steps = Math.min(Math.floor(dist / TRAIL_SPACING), 8);
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
-      spawnTrailSplash(
-        new THREE.Vector3(originX + dx * t, point.y, originZ + dz * t),
-        movementSpeed
-      );
+      _oceanHit.set(originX + dx * t, point.y, originZ + dz * t);
+      spawnTrailSplash(_oceanHit, movementSpeed);
     }
     dragState.lastSplash = { x: point.x, z: point.z };
   }
 
   canvas.addEventListener("pointerdown", (event) => {
-    if (activeView === "top") {
-      // Right-click (or secondary button) drag pans the Top composition camera
-      if (event.button === 2) {
-        event.preventDefault();
-        topPanState.active = true;
-        topPanState.pointerId = event.pointerId;
-        topPanState.lastX = event.clientX;
-        topPanState.lastY = event.clientY;
-        canvas.setPointerCapture(event.pointerId);
-      }
-      return;
-    }
     if (event.button !== 0) return;
     canvas.setPointerCapture(event.pointerId);
     dragState.active = true;
@@ -3711,20 +2221,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   });
 
   canvas.addEventListener("pointermove", (event) => {
-    if (activeView === "top") {
-      if (!topPanState.active || event.pointerId !== topPanState.pointerId) return;
-      const dx = event.clientX - topPanState.lastX;
-      const dy = event.clientY - topPanState.lastY;
-      topPanState.lastX = event.clientX;
-      topPanState.lastY = event.clientY;
-      const worldPerPixel = (2 * topView.halfExtent) / Math.max(window.innerHeight, 1);
-      // Drag the map with the cursor (content follows the pointer)
-      topView.centerX -= dx * worldPerPixel;
-      topView.centerZ -= dy * worldPerPixel;
-      updateTopCameraFrustum();
-      return;
-    }
-
     if (!dragState.active || event.pointerId !== dragState.pointerId) return;
 
     const dx = event.clientX - dragState.startX;
@@ -3748,19 +2244,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   });
 
   function endPointer(event) {
-    if (topPanState.active && event.pointerId === topPanState.pointerId) {
-      topPanState.active = false;
-      topPanState.pointerId = null;
-      try {
-        canvas.releasePointerCapture(event.pointerId);
-      } catch (_) {
-        /* already released */
-      }
-      return;
-    }
-
-    if (activeView === "top") return;
-
     if (!dragState.active || event.pointerId !== dragState.pointerId) return;
 
     const wasDragging = dragState.isDragging;
@@ -3783,7 +2266,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     // Short press → delayed focus (so double-click can cancel it)
     clearTimeout(clickTimer);
     clickTimer = setTimeout(() => {
-      if (activeView !== "perspective") return;
       const point = getOceanPoint(x, y);
       if (point) focusOnPoint(point);
       clickTimer = null;
@@ -3794,7 +2276,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   canvas.addEventListener("pointercancel", endPointer);
 
   canvas.addEventListener("dblclick", (event) => {
-    if (activeView !== "perspective") return;
     event.preventDefault();
     clearTimeout(clickTimer);
     clickTimer = null;
@@ -3808,22 +2289,46 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     }
   });
 
-  function onResize() {
+  let resizeDirty = true;
+  let lastHeroPull = heroDistancePull();
+
+  function applyResponsiveCameraDistance() {
+    // Preserve look target (pan state); scale camera offset when viewport class changes.
+    const pull = heroDistancePull();
+    if (pull === lastHeroPull) return;
+    const ratio = pull / lastHeroPull;
+    lastHeroPull = pull;
+    _zoomOffset.subVectors(
+      cameraState.targetPosition,
+      cameraState.targetLookAt
+    );
+    _zoomOffset.multiplyScalar(ratio);
+    cameraState.targetPosition.copy(cameraState.targetLookAt).add(_zoomOffset);
+    // Keep live pose in sync so there is no ease jump after resize.
+    cameraState.position.copy(cameraState.targetPosition);
+    clampNavigation();
+    cameraState.position.copy(cameraState.targetPosition);
+  }
+
+  function applyResizeIfNeeded() {
+    if (!resizeDirty) return;
+    resizeDirty = false;
     const w = window.innerWidth;
     const h = window.innerHeight;
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
-    updateTopCameraFrustum();
+    const dpr = Math.min(window.devicePixelRatio, 2);
+    renderer.setPixelRatio(dpr);
     renderer.setSize(w, h);
-    uniforms.uPixelRatio.value = Math.min(window.devicePixelRatio, 2);
-    renderer.setPixelRatio(uniforms.uPixelRatio.value);
+    uniforms.uPixelRatio.value = dpr;
     floatingModels.forEach((state) => {
       if (state.surfaceMaterial?.uniforms?.uPixelRatio) {
-        state.surfaceMaterial.uniforms.uPixelRatio.value = uniforms.uPixelRatio.value;
+        state.surfaceMaterial.uniforms.uPixelRatio.value = dpr;
       }
     });
     resizeContourTargets();
     resizeWaterDepthTarget();
+    // Water-depth RT texture/size only changes on resize — sync targets here (not every frame).
     syncWaterDepthUniformTargets(contourCaptureUniforms);
     syncWaterDepthUniformTargets(depthOnlyMaterial.uniforms);
     floatingModels.forEach((state) => {
@@ -3831,8 +2336,11 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         syncWaterDepthUniformTargets(state.surfaceMaterial.uniforms);
       }
     });
+    applyResponsiveCameraDistance();
   }
-  window.addEventListener("resize", onResize);
+  window.addEventListener("resize", () => {
+    resizeDirty = true;
+  });
 
   const currentLook = cameraState.lookAt.clone();
 
@@ -3843,41 +2351,31 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     contourCompositeUniforms.uInvViewMatrix.value.copy(cam.matrixWorld);
     contourCompositeUniforms.uProjX.value = cam.projectionMatrix.elements[0];
     contourCompositeUniforms.uProjY.value = cam.projectionMatrix.elements[5];
-    contourCompositeUniforms.uCamMode.value = cam.isOrthographicCamera ? 1 : 0;
+    contourCompositeUniforms.uCamMode.value = 0; // perspective only
   }
 
   function animate() {
     requestAnimationFrame(animate);
+    applyResizeIfNeeded();
     const time = clock.getElapsedTime();
     uniforms.uTime.value = time;
     syncSplashUniforms(time);
 
     updateFloatingModels(time);
 
-    if (activeView === "perspective") {
-      // Smooth camera ease
-      cameraState.position.lerp(cameraState.targetPosition, 0.045);
-      cameraState.lookAt.lerp(cameraState.targetLookAt, 0.055);
-      camera.position.copy(cameraState.position);
-      currentLook.copy(cameraState.lookAt);
-      camera.lookAt(currentLook);
-    } else {
-      updateCompositionLabels();
-    }
+    // Smooth camera ease
+    cameraState.position.lerp(cameraState.targetPosition, 0.045);
+    cameraState.lookAt.lerp(cameraState.targetLookAt, 0.055);
+    camera.position.copy(cameraState.position);
+    currentLook.copy(cameraState.lookAt);
+    camera.lookAt(currentLook);
 
-    syncContourWaveMatrices(activeCamera);
+    syncContourWaveMatrices(camera);
     renderWaterDepthPass();
-    syncWaterDepthUniformTargets(contourCaptureUniforms);
-    syncWaterDepthUniformTargets(depthOnlyMaterial.uniforms);
-    contourModels.forEach((state) => {
-      if (state.surfaceMaterial) {
-        syncWaterDepthUniformTargets(state.surfaceMaterial.uniforms);
-      }
-    });
     const contourOn = renderContourPass();
 
     renderer.autoClear = true;
-    renderer.render(scene, activeCamera);
+    renderer.render(scene, camera);
 
     if (contourOn) {
       renderer.autoClear = false;
@@ -3887,4 +2385,81 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   }
 
   animate();
+
+  // Invisible production QA probe (no UI). Used only by local measurement scripts.
+  window.__STIPPLED_PERF__ = {
+    getInfo() {
+      return {
+        memory: renderer.info.memory,
+        render: { ...renderer.info.render },
+        dpr: renderer.getPixelRatio(),
+        size: renderer.getSize(new THREE.Vector2()),
+        oceanVertices: PARTICLE_COUNT,
+        activeSplashes: activeSplashes.length,
+        activeSplashUniform: uniforms.uActiveSplashCount.value,
+        look: {
+          background: appearanceColours.background,
+          bodies: appearanceColours.bodies,
+          waves: appearanceColours.waves,
+          waveDensity: uniforms.uWaveParticleDensity.value,
+          waveDotScale: uniforms.uWaveDotScale.value,
+          contourDensity: contourCompositeUniforms.uContourDensity.value,
+          surfaceStrength: FINAL_LOOK.visibility.surfaceStrength,
+        },
+        composition: {
+          projects: {
+            x: floatingModels.find((m) => m.id === "projects")?.x,
+            z: floatingModels.find((m) => m.id === "projects")?.z,
+            scale: floatingModels.find((m) => m.id === "projects")?.scale,
+          },
+          about: {
+            x: floatingModels.find((m) => m.id === "about")?.x,
+            z: floatingModels.find((m) => m.id === "about")?.z,
+            scale: floatingModels.find((m) => m.id === "about")?.scale,
+          },
+          interests: {
+            x: floatingModels.find((m) => m.id === "interests")?.x,
+            z: floatingModels.find((m) => m.id === "interests")?.z,
+            scale: floatingModels.find((m) => m.id === "interests")?.scale,
+          },
+        },
+        surfacePointCounts: contourModels.map((s) => ({
+          id: s.id,
+          count: s.surfacePoints?.geometry?.attributes?.position?.count ?? 0,
+        })),
+        modelsReady: floatingModels.filter((m) => m.ready).length,
+        camera: {
+          position: {
+            x: cameraState.position.x,
+            y: cameraState.position.y,
+            z: cameraState.position.z,
+          },
+          lookAt: {
+            x: cameraState.lookAt.x,
+            y: cameraState.lookAt.y,
+            z: cameraState.lookAt.z,
+          },
+          targetPosition: {
+            x: cameraState.targetPosition.x,
+            y: cameraState.targetPosition.y,
+            z: cameraState.targetPosition.z,
+          },
+          targetLookAt: {
+            x: cameraState.targetLookAt.x,
+            y: cameraState.targetLookAt.y,
+            z: cameraState.targetLookAt.z,
+          },
+          pitchDeg: (() => {
+            const ox = cameraState.position.x - cameraState.lookAt.x;
+            const oy = cameraState.position.y - cameraState.lookAt.y;
+            const oz = cameraState.position.z - cameraState.lookAt.z;
+            const horiz = Math.hypot(ox, oz);
+            return (Math.atan2(oy, horiz) * 180) / Math.PI;
+          })(),
+          dist: cameraState.position.distanceTo(cameraState.lookAt),
+          heroPull: heroDistancePull(),
+        },
+      };
+    },
+  };
 })();
