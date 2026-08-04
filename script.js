@@ -666,8 +666,8 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     "stippled-ocean-proj-adaptive-stipple-v1",
   ].forEach((k) => localStorage.removeItem(k));
 
-  // Immutable snapshot of the successful Digital Matrix appearance — never mutate.
-  const DIGITAL_MATRIX_LEGACY = Object.freeze({
+  const CONTOUR_DEFAULTS = {
+    mode: "contour", // "solid" | "contour"
     silhouette: 0.9,
     internal: 0.55,
     edgeThreshold: 0.45,
@@ -678,114 +678,61 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     surfaceDensity: 0.55,
     contourColor: "#f4efe6",
     surfaceColor: "#d8d2c8",
-  });
-
-  const CONTOUR_DEFAULTS = {
-    mode: "contour", // "solid" | "contour"
-    grainStyle: "digital", // "digital" | "distressed" — Digital Matrix is the safe default
-    ...DIGITAL_MATRIX_LEGACY,
-    organicDistortion: 0.4,
-    textureBreakup: 0.45,
     debug: "final", // final | depth | normals | edges
   };
-
-  function applyDigitalMatrixLegacy(settings) {
-    return {
-      ...settings,
-      grainStyle: "digital",
-      silhouette: DIGITAL_MATRIX_LEGACY.silhouette,
-      internal: DIGITAL_MATRIX_LEGACY.internal,
-      edgeThreshold: DIGITAL_MATRIX_LEGACY.edgeThreshold,
-      stippleSpacing: DIGITAL_MATRIX_LEGACY.stippleSpacing,
-      contourCssPx: DIGITAL_MATRIX_LEGACY.contourCssPx,
-      surfaceStrength: DIGITAL_MATRIX_LEGACY.surfaceStrength,
-      surfaceCssPx: DIGITAL_MATRIX_LEGACY.surfaceCssPx,
-      surfaceDensity: DIGITAL_MATRIX_LEGACY.surfaceDensity,
-      contourColor: DIGITAL_MATRIX_LEGACY.contourColor,
-      surfaceColor: DIGITAL_MATRIX_LEGACY.surfaceColor,
-    };
-  }
 
   function loadContourSettings() {
     try {
       const raw = localStorage.getItem(CONTOUR_STORAGE_KEY);
-      if (!raw) return applyDigitalMatrixLegacy({ ...CONTOUR_DEFAULTS });
+      if (!raw) return { ...CONTOUR_DEFAULTS };
       const p = JSON.parse(raw);
       const debugOk = ["final", "depth", "normals", "edges"].includes(p.debug);
-      // Failed "organic" scatter is retired — fall back to Digital Matrix.
-      // "distressed" is the new alternative derived from Digital Matrix.
-      let grainStyle = "digital";
-      if (p.grainStyle === "distressed") grainStyle = "distressed";
-      else if (p.grainStyle === "organic") grainStyle = "digital";
-
-      const base = {
+      return {
         mode: p.mode === "solid" ? "solid" : "contour",
-        grainStyle,
-        silhouette: THREE.MathUtils.clamp(
-          Number(p.silhouette) ?? DIGITAL_MATRIX_LEGACY.silhouette,
-          0,
-          1
-        ),
-        internal: THREE.MathUtils.clamp(
-          Number(p.internal) ?? DIGITAL_MATRIX_LEGACY.internal,
-          0,
-          1
-        ),
+        silhouette: THREE.MathUtils.clamp(Number(p.silhouette) ?? 0.9, 0, 1),
+        internal: THREE.MathUtils.clamp(Number(p.internal) ?? 0.55, 0, 1),
         edgeThreshold: THREE.MathUtils.clamp(
-          Number(p.edgeThreshold) ?? DIGITAL_MATRIX_LEGACY.edgeThreshold,
+          Number(p.edgeThreshold) ?? 0.45,
           0.05,
           1.5
         ),
         stippleSpacing: THREE.MathUtils.clamp(
-          Number(p.stippleSpacing) ?? DIGITAL_MATRIX_LEGACY.stippleSpacing,
+          Number(p.stippleSpacing) ?? 2.2,
           1.2,
           5
         ),
         contourCssPx: THREE.MathUtils.clamp(
-          Number(p.contourCssPx) ?? DIGITAL_MATRIX_LEGACY.contourCssPx,
+          Number(p.contourCssPx) ?? 0.9,
           0.5,
           1.3
         ),
         surfaceStrength: THREE.MathUtils.clamp(
-          Number(p.surfaceStrength) ?? DIGITAL_MATRIX_LEGACY.surfaceStrength,
+          Number(p.surfaceStrength) ?? 0.25,
           0,
           0.6
         ),
         surfaceCssPx: THREE.MathUtils.clamp(
-          Number(p.surfaceCssPx) ?? DIGITAL_MATRIX_LEGACY.surfaceCssPx,
+          Number(p.surfaceCssPx) ?? 0.65,
           0.4,
           0.9
         ),
         surfaceDensity: THREE.MathUtils.clamp(
-          Number(p.surfaceDensity) ?? DIGITAL_MATRIX_LEGACY.surfaceDensity,
+          Number(p.surfaceDensity) ?? 0.55,
           0.15,
-          1
-        ),
-        organicDistortion: THREE.MathUtils.clamp(
-          Number(p.organicDistortion) ?? 0.4,
-          0,
-          1
-        ),
-        textureBreakup: THREE.MathUtils.clamp(
-          Number(p.textureBreakup) ?? 0.45,
-          0,
           1
         ),
         contourColor:
           typeof p.contourColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.contourColor)
             ? p.contourColor
-            : DIGITAL_MATRIX_LEGACY.contourColor,
+            : CONTOUR_DEFAULTS.contourColor,
         surfaceColor:
           typeof p.surfaceColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.surfaceColor)
             ? p.surfaceColor
-            : DIGITAL_MATRIX_LEGACY.surfaceColor,
+            : CONTOUR_DEFAULTS.surfaceColor,
         debug: debugOk ? p.debug : "final",
       };
-      // Digital Matrix always snaps appearance constants to the immutable legacy preset
-      if (base.grainStyle === "digital") return applyDigitalMatrixLegacy(base);
-      return base;
     } catch (_) {
-      return applyDigitalMatrixLegacy({ ...CONTOUR_DEFAULTS });
+      return { ...CONTOUR_DEFAULTS };
     }
   }
 
@@ -844,21 +791,14 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     tBuffer: { value: contourRT.texture },
     uResolution: { value: new THREE.Vector2(1, 1) },
     uPixelRatio: { value: renderer.getPixelRatio() },
-    uSilhouette: { value: DIGITAL_MATRIX_LEGACY.silhouette },
-    uInternal: { value: DIGITAL_MATRIX_LEGACY.internal },
-    uThreshold: { value: DIGITAL_MATRIX_LEGACY.edgeThreshold },
-    uStippleSpacing: { value: DIGITAL_MATRIX_LEGACY.stippleSpacing },
-    uContourCssPx: { value: DIGITAL_MATRIX_LEGACY.contourCssPx },
-    uContourColor: { value: new THREE.Color(DIGITAL_MATRIX_LEGACY.contourColor) },
+    uSilhouette: { value: 0.9 },
+    uInternal: { value: 0.55 },
+    uThreshold: { value: 0.45 },
+    uStippleSpacing: { value: 2.2 },
+    uContourCssPx: { value: 0.9 },
+    uContourColor: { value: new THREE.Color(CONTOUR_DEFAULTS.contourColor) },
     uScreenRadius: { value: 80 },
     uDebug: { value: 0 },
-    uGrainStyle: { value: 0 }, // 0 = Digital Matrix (legacy, untouched), 1 = Organic Distressed
-    uOrganicDistortion: { value: 0.4 },
-    uTextureBreakup: { value: 0.45 },
-    // View→Projects-local for object-anchored distress (Organic Distressed only)
-    uProjScale: { value: new THREE.Vector2(1, 1) },
-    uCamPerspective: { value: 1 },
-    uViewToLocal: { value: new THREE.Matrix4() },
   };
 
   const contourCompositeMaterial = new THREE.ShaderMaterial({
@@ -887,12 +827,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       uniform vec3 uContourColor;
       uniform float uScreenRadius;
       uniform int uDebug;
-      uniform int uGrainStyle;
-      uniform float uOrganicDistortion;
-      uniform float uTextureBreakup;
-      uniform vec2 uProjScale;
-      uniform float uCamPerspective;
-      uniform mat4 uViewToLocal;
 
       varying vec2 vUv;
 
@@ -903,44 +837,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       float objectMask(vec4 s) {
         // Empty buffer cleared to 0; object has positive view depth
         return step(0.02, s.a);
-      }
-
-      // Stable, non-lattice hash (not Bayer / not screen grid)
-      float hash21(vec2 p) {
-        p = fract(p * vec2(123.34, 456.21));
-        p += dot(p, p + 45.32);
-        return fract(p.x * p.y);
-      }
-
-      float valueNoise(vec2 p) {
-        vec2 i = floor(p);
-        vec2 f = fract(p);
-        f = f * f * (3.0 - 2.0 * f);
-        float a = hash21(i);
-        float b = hash21(i + vec2(1.0, 0.0));
-        float c = hash21(i + vec2(0.0, 1.0));
-        float d = hash21(i + vec2(1.0, 1.0));
-        return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-      }
-
-      // Reconstruct Projects-group local position from linear view depth
-      vec3 localFromDepth(vec2 uv, float depth) {
-        vec2 ndc = uv * 2.0 - 1.0;
-        vec3 viewPos;
-        if (uCamPerspective > 0.5) {
-          viewPos = vec3(
-            ndc.x * depth / max(uProjScale.x, 1e-5),
-            ndc.y * depth / max(uProjScale.y, 1e-5),
-            -depth
-          );
-        } else {
-          viewPos = vec3(
-            ndc.x / max(uProjScale.x, 1e-5),
-            ndc.y / max(uProjScale.y, 1e-5),
-            -depth
-          );
-        }
-        return (uViewToLocal * vec4(viewPos, 1.0)).xyz;
       }
 
       void main() {
@@ -996,152 +892,44 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
           return;
         }
 
+        // Stable screen-space stipple: circular dots on a fixed pixel grid
+        float spacing = max(uStippleSpacing, 1.2) * uPixelRatio;
         vec2 pixel = vUv * uResolution;
+        vec2 cell = floor(pixel / spacing);
+        vec2 centre = (cell + 0.5) * spacing;
+        float dist = length(pixel - centre);
+        float radius = clamp(uContourCssPx, 0.5, 1.3) * uPixelRatio * 0.5;
+        float dotMask = 1.0 - smoothstep(radius * 0.75, radius * 1.15, dist);
 
-        // ─── DIGITAL MATRIX (untouched algorithm) ─────────────────────────
-        // Source of the LED/Bayer look: floor(pixel/spacing) forces every
-        // mark onto a regular screen-aligned lattice of cell centres.
-        if (uGrainStyle == 0) {
-          float spacing = max(uStippleSpacing, 1.2) * uPixelRatio;
-          vec2 cell = floor(pixel / spacing);
-          vec2 centre = (cell + 0.5) * spacing;
-          float dist = length(pixel - centre);
-          float radius = clamp(uContourCssPx, 0.5, 1.3) * uPixelRatio * 0.5;
-          float dotMask = 1.0 - smoothstep(radius * 0.75, radius * 1.15, dist);
-
-          // Edge strength sampled at the stipple centre (stable, less crawl)
-          vec2 centreUv = centre / uResolution;
-          vec4 cc = fetch(centreUv);
-          float cd[9];
-          vec3 cn[9];
-          k = 0;
-          for (int j = -1; j <= 1; j++) {
-            for (int i = -1; i <= 1; i++) {
-              vec4 s = fetch(centreUv + vec2(float(i), float(j)) * texel);
-              cd[k] = s.a;
-              cn[k] = s.rgb * 2.0 - 1.0;
-              k++;
-            }
-          }
-          float cgxD = -cd[0]-2.0*cd[3]-cd[6]+cd[2]+2.0*cd[5]+cd[8];
-          float cgyD = -cd[0]-2.0*cd[1]-cd[2]+cd[6]+2.0*cd[7]+cd[8];
-          float cDepth = sqrt(cgxD*cgxD + cgyD*cgyD);
-          vec3 cgxN = -cn[0]-2.0*cn[3]-cn[6]+cn[2]+2.0*cn[5]+cn[8];
-          vec3 cgyN = -cn[0]-2.0*cn[1]-cn[2]+cn[6]+2.0*cn[7]+cn[8];
-          float cNorm = length(cgxN) + length(cgyN);
-          float cSil = smoothstep(uThreshold * 0.35, uThreshold * 1.8, cDepth);
-          float cInt = smoothstep(uThreshold * 0.25, uThreshold * 1.2, cNorm) * objectMask(cc);
-          cInt *= 1.0 - cSil * 0.65;
-          float cEdge = clamp(cSil * silW + cInt * intW, 0.0, 1.0);
-
-          float alpha = cEdge * dotMask;
-          // Controlled brightness — not overexposed white
-          vec3 col = uContourColor * mix(0.55, 0.92, cSil * 0.65 + cInt * 0.35);
-          gl_FragColor = vec4(col, alpha * 0.92);
-          return;
-        }
-
-        // ─── ORGANIC DISTRESSED ───────────────────────────────────────────
-        // Same Digital Matrix grain, then restrained domain warp / irregular
-        // dropout / sub-pixel jitter. Not blue-noise replacement, not sparse CAD.
-        float distort = clamp(uOrganicDistortion, 0.0, 1.0);
-        float breakup = clamp(uTextureBreakup, 0.0, 1.0);
-
-        float oSpacing = max(uStippleSpacing, 1.2) * uPixelRatio;
-
-        // Object-anchored seed from depth (stable under bob / camera motion)
-        vec3 localP = localFromDepth(vUv, max(c.a, 0.02));
-        vec2 anchor = localP.xz * 0.31 + localP.xy * 0.17;
-        anchor = mix(pixel * 0.0011, anchor, m);
-
-        // Smooth low-frequency domain warp (subtle)
-        vec2 warpCoord = pixel * (0.018 / max(uPixelRatio, 1.0)) + anchor * 0.55;
-        float n1 = valueNoise(warpCoord);
-        float n2 = valueNoise(warpCoord + vec2(4.7, 1.9));
-        float n3 = valueNoise(warpCoord * 0.47 + vec2(9.1, 3.3));
-        vec2 warp = vec2(n1, n2) * 2.0 - 1.0;
-        warp += (vec2(n3, valueNoise(warpCoord.yx + 2.4)) * 2.0 - 1.0) * 0.35;
-        float warpPx = oSpacing * (0.12 + 0.28 * distort);
-        vec2 warpedPixel = pixel + warp * warpPx;
-
-        // Irregular local spacing (gentle stretch — not a new lattice)
-        float spaceVar = mix(0.94, 1.08, valueNoise(anchor * 1.7 + floor(warpedPixel * 0.07)));
-        float localSpacing = oSpacing * mix(1.0, spaceVar, distort * 0.85);
-
-        vec2 oCell = floor(warpedPixel / localSpacing);
-        vec2 oCentre = (oCell + 0.5) * localSpacing;
-
-        // Sub-pixel positional jitter ~0.3–0.7 CSS px along / across marks
-        float jitterCss = mix(0.3, 0.7, distort);
-        float jitterPxAmt = jitterCss * uPixelRatio;
-        vec2 jHash = vec2(
-          hash21(oCell + anchor * 3.1 + vec2(1.7, 4.2)),
-          hash21(oCell + anchor.yx * 2.9 + vec2(8.3, 0.6))
-        );
-        oCentre += (jHash * 2.0 - 1.0) * jitterPxAmt;
-
-        // Occasional mark sits slightly outside the perfect edge sample
-        vec2 samplePx = oCentre + (jHash.yx * 2.0 - 1.0) * (0.35 * uPixelRatio * distort);
-        vec2 oCentreUv = samplePx / uResolution;
-        vec4 oSample = fetch(oCentreUv);
-        float od[9];
-        vec3 onrm[9];
+        // Edge strength sampled at the stipple centre (stable, less crawl)
+        vec2 centreUv = centre / uResolution;
+        vec4 cc = fetch(centreUv);
+        float cd[9];
+        vec3 cn[9];
         k = 0;
         for (int j = -1; j <= 1; j++) {
           for (int i = -1; i <= 1; i++) {
-            vec4 s = fetch(oCentreUv + vec2(float(i), float(j)) * texel);
-            od[k] = s.a;
-            onrm[k] = s.rgb * 2.0 - 1.0;
+            vec4 s = fetch(centreUv + vec2(float(i), float(j)) * texel);
+            cd[k] = s.a;
+            cn[k] = s.rgb * 2.0 - 1.0;
             k++;
           }
         }
-        float ogxD = -od[0]-2.0*od[3]-od[6]+od[2]+2.0*od[5]+od[8];
-        float ogyD = -od[0]-2.0*od[1]-od[2]+od[6]+2.0*od[7]+od[8];
-        float oDepth = sqrt(ogxD*ogxD + ogyD*ogyD);
-        vec3 ogxN = -onrm[0]-2.0*onrm[3]-onrm[6]+onrm[2]+2.0*onrm[5]+onrm[8];
-        vec3 ogyN = -onrm[0]-2.0*onrm[1]-onrm[2]+onrm[6]+2.0*onrm[7]+onrm[8];
-        float oNorm = length(ogxN) + length(ogyN);
-        float oSil = smoothstep(uThreshold * 0.35, uThreshold * 1.8, oDepth);
-        float oInt = smoothstep(uThreshold * 0.25, uThreshold * 1.2, oNorm) * objectMask(oSample);
-        oInt *= 1.0 - oSil * 0.65;
-        float oEdge = clamp(oSil * silW + oInt * intW, 0.0, 1.0);
+        float cgxD = -cd[0]-2.0*cd[3]-cd[6]+cd[2]+2.0*cd[5]+cd[8];
+        float cgyD = -cd[0]-2.0*cd[1]-cd[2]+cd[6]+2.0*cd[7]+cd[8];
+        float cDepth = sqrt(cgxD*cgxD + cgyD*cgyD);
+        vec3 cgxN = -cn[0]-2.0*cn[3]-cn[6]+cn[2]+2.0*cn[5]+cn[8];
+        vec3 cgyN = -cn[0]-2.0*cn[1]-cn[2]+cn[6]+2.0*cn[7]+cn[8];
+        float cNorm = length(cgxN) + length(cgyN);
+        float cSil = smoothstep(uThreshold * 0.35, uThreshold * 1.8, cDepth);
+        float cInt = smoothstep(uThreshold * 0.25, uThreshold * 1.2, cNorm) * objectMask(cc);
+        cInt *= 1.0 - cSil * 0.65;
+        float cEdge = clamp(cSil * silW + cInt * intW, 0.0, 1.0);
 
-        // Irregular contour dropout — unequal gap lengths, hierarchy-aware
-        float hDrop = hash21(oCell * 1.13 + floor(anchor * 4.7));
-        float hGap = hash21(oCell * 0.71 + floor(anchor * 2.3 + 11.0));
-        float gapLen = mix(0.08, 0.42, hGap);
-        float runPhase = fract(dot(oCell, vec2(0.173, 0.311)) + hash21(floor(anchor * 1.9)));
-        float inGap = step(1.0 - gapLen * breakup, runPhase);
-
-        // Retention: sil ~80–90%, major internal ~55–70%, minor ~30–50%
-        float silRetain = mix(0.82, 0.90, hash21(oCell + 2.4));
-        float majRetain = mix(0.55, 0.70, hash21(oCell + 5.1));
-        float minRetain = mix(0.30, 0.50, hash21(oCell + 7.8));
-        float retain = minRetain;
-        retain = mix(retain, majRetain, smoothstep(0.12, 0.45, oInt));
-        retain = mix(retain, silRetain, oSil);
-        float surfaceKeep = mix(0.55, 0.88, valueNoise(anchor * 2.1 + oCell * 0.05));
-        retain = mix(surfaceKeep, retain, smoothstep(0.05, 0.35, oEdge));
-        retain = mix(1.0, retain, 0.35 + 0.65 * breakup);
-
-        float keep = (1.0 - inGap * step(0.2, oEdge)) * step(hDrop, retain);
-        // Avoid long total silhouette loss
-        keep = max(keep, oSil * step(hDrop, 0.92));
-
-        // Dot size ±15%, opacity ±18%
-        float sizeVar = mix(0.85, 1.15, hash21(oCell + anchor + vec2(3.3, 1.1)));
-        float opacVar = mix(0.82, 1.18, hash21(oCell + anchor.yx + vec2(6.2, 0.4)));
-        sizeVar = mix(1.0, sizeVar, 0.55 + 0.45 * distort);
-        opacVar = mix(1.0, opacVar, 0.55 + 0.45 * breakup);
-
-        float oRadius = clamp(uContourCssPx, 0.5, 1.3) * uPixelRatio * 0.5 * sizeVar;
-        float oDist = length(pixel - oCentre);
-        float oDot = 1.0 - smoothstep(oRadius * 0.75, oRadius * 1.15, oDist);
-
-        float oAlpha = oEdge * oDot * keep * opacVar;
-        // Same ghost opacity floor as Digital Matrix (no brightness boost)
-        vec3 oCol = uContourColor * mix(0.55, 0.92, oSil * 0.65 + oInt * 0.35);
-        gl_FragColor = vec4(oCol, oAlpha * 0.92);
+        float alpha = cEdge * dotMask;
+        // Controlled brightness — not overexposed white
+        vec3 col = uContourColor * mix(0.55, 0.92, cSil * 0.65 + cInt * 0.35);
+        gl_FragColor = vec4(col, alpha * 0.92);
       }
     `,
   });
@@ -1186,9 +974,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         uDensity: { value: settings.surfaceDensity },
         uLightDir: { value: new THREE.Vector3(0.4, 0.85, 0.35).normalize() },
         uScreenRadius: { value: 80 },
-        uGrainStyle: { value: settings.grainStyle === "digital" ? 0 : 1 },
-        uOrganicDistortion: { value: settings.organicDistortion ?? 0.4 },
-        uTextureBreakup: { value: settings.textureBreakup ?? 0.45 },
       },
       transparent: true,
       depthTest: true,
@@ -1205,54 +990,31 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         uniform float uDensity;
         uniform vec3 uLightDir;
         uniform float uScreenRadius;
-        uniform int uGrainStyle;
-        uniform float uOrganicDistortion;
-        uniform float uTextureBreakup;
 
         varying float vAlpha;
         varying float vShade;
 
-        float hashPos(vec3 p) {
-          return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
-        }
-
         void main() {
           vec3 nView = normalize(normalMatrix * aNormal);
-          float facing = nView.z;
+          // Suppress strongly back-facing
+          float facing = nView.z; // in view space, camera looks down -Z; front has +z normal toward camera... 
+          // view-space: camera looks -Z, front faces have normal.z > 0 when normalMatrix applied correctly
           float front = smoothstep(-0.05, 0.35, facing);
 
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
           gl_Position = projectionMatrix * mv;
 
           float css = clamp(uCssPx, 0.4, 0.9);
-          // Distressed: subtle ±15% size; Digital: exact size
-          float sizeVar = 1.0;
-          if (uGrainStyle == 1) {
-            float distort = clamp(uOrganicDistortion, 0.0, 1.0);
-            sizeVar = mix(0.85, 1.15, fract(aRank * 17.13 + 0.37));
-            sizeVar = mix(1.0, sizeVar, 0.55 + 0.45 * distort);
-          }
-          gl_PointSize = css * uPixelRatio * sizeVar;
+          gl_PointSize = css * uPixelRatio;
 
           float ndl = clamp(dot(nView, normalize(uLightDir)) * 0.5 + 0.5, 0.0, 1.0);
           vShade = mix(0.35, 0.75, ndl);
 
+          // Distance: drop surface before it becomes an orb
           float sizeNorm = clamp(uScreenRadius / 140.0, 0.0, 1.0);
           float distSurf = mix(0.0, 1.0, smoothstep(0.15, 0.55, sizeNorm));
-          // Same density as Digital Matrix — uneven object-anchored dropout only
-          float dens = uDensity;
-          float keep = step(aRank, dens * distSurf);
-          float opacVar = 1.0;
-          if (uGrainStyle == 1) {
-            float breakup = clamp(uTextureBreakup, 0.0, 1.0);
-            float h = hashPos(position);
-            // Moderate uneven surface dropout (not global sparsity)
-            float surfaceGate = mix(0.72, 0.96, h);
-            keep *= step(mix(0.0, 0.22, breakup), surfaceGate);
-            opacVar = mix(0.82, 1.18, fract(aRank * 9.71 + 0.19));
-            opacVar = mix(1.0, opacVar, 0.55 + 0.45 * breakup);
-          }
-          vAlpha = uStrength * front * keep * 0.85 * opacVar;
+          float keep = step(aRank, uDensity * distSurf);
+          vAlpha = uStrength * front * keep * 0.85;
           if (vAlpha < 0.01) {
             gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
           }
@@ -1444,9 +1206,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     contourCompositeUniforms.uStippleSpacing.value = s.stippleSpacing;
     contourCompositeUniforms.uContourCssPx.value = s.contourCssPx;
     contourCompositeUniforms.uContourColor.value.set(s.contourColor);
-    contourCompositeUniforms.uGrainStyle.value = s.grainStyle === "digital" ? 0 : 1;
-    contourCompositeUniforms.uOrganicDistortion.value = s.organicDistortion ?? 0.4;
-    contourCompositeUniforms.uTextureBreakup.value = s.textureBreakup ?? 0.45;
     const debugMap = { final: 0, depth: 1, normals: 2, edges: 3 };
     contourCompositeUniforms.uDebug.value = debugMap[s.debug] ?? 0;
 
@@ -1455,17 +1214,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       state.surfaceMaterial.uniforms.uStrength.value = s.surfaceStrength;
       state.surfaceMaterial.uniforms.uDensity.value = s.surfaceDensity;
       state.surfaceMaterial.uniforms.uColor.value.set(s.surfaceColor);
-      state.surfaceMaterial.uniforms.uGrainStyle.value =
-        s.grainStyle === "digital" ? 0 : 1;
-      state.surfaceMaterial.uniforms.uOrganicDistortion.value =
-        s.organicDistortion ?? 0.4;
-      state.surfaceMaterial.uniforms.uTextureBreakup.value =
-        s.textureBreakup ?? 0.45;
-    }
-
-    const organicControls = document.getElementById("proj-organic-controls");
-    if (organicControls) {
-      organicControls.hidden = s.grainStyle !== "distressed";
     }
   }
 
@@ -1526,8 +1274,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     );
   }
 
-  const contourInvGroup = new THREE.Matrix4();
-
   function renderProjectsContourPass(state) {
     if (!state || state.contourSettings?.mode !== "contour") return false;
 
@@ -1536,19 +1282,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     if (state.surfaceMaterial) {
       state.surfaceMaterial.uniforms.uScreenRadius.value = screenR;
     }
-
-    // Object-anchored distress: view → Projects group local
-    const proj = activeCamera.projectionMatrix.elements;
-    contourCompositeUniforms.uProjScale.value.set(proj[0], proj[5]);
-    contourCompositeUniforms.uCamPerspective.value = activeCamera.isPerspectiveCamera
-      ? 1
-      : 0;
-    state.group.updateWorldMatrix(true, false);
-    activeCamera.updateMatrixWorld(true);
-    contourInvGroup.copy(state.group.matrixWorld).invert();
-    contourCompositeUniforms.uViewToLocal.value
-      .copy(contourInvGroup)
-      .multiply(activeCamera.matrixWorld);
 
     // Capture Projects-only depth/normals
     const prevMask = activeCamera.layers.mask;
@@ -2042,12 +1775,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       });
     };
 
-    const syncGrain = (grainStyle) => {
-      document.querySelectorAll("[data-proj-grain-style]").forEach((btn) => {
-        btn.classList.toggle("is-active", btn.dataset.projGrainStyle === grainStyle);
-      });
-    };
-
     const syncDebug = (debug) => {
       document.querySelectorAll("[data-proj-contour-debug]").forEach((btn) => {
         btn.classList.toggle("is-active", btn.dataset.projContourDebug === debug);
@@ -2064,8 +1791,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       ["tune-proj-contour-sstr", "tune-proj-contour-sstr-val", "surfaceStrength", 0, 0.6, 2],
       ["tune-proj-contour-ssize", "tune-proj-contour-ssize-val", "surfaceCssPx", 0.4, 0.9, 2],
       ["tune-proj-contour-sdens", "tune-proj-contour-sdens-val", "surfaceDensity", 0.15, 1, 2],
-      ["tune-proj-organic-distort", "tune-proj-organic-distort-val", "organicDistortion", 0, 1, 2],
-      ["tune-proj-texture-breakup", "tune-proj-texture-breakup-val", "textureBreakup", 0, 1, 2],
     ];
 
     map.forEach(([id, outId, key, min, max, digits]) => {
@@ -2103,9 +1828,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     }
 
     syncMode(settings.mode);
-    syncGrain(settings.grainStyle);
     syncDebug(settings.debug);
-    applyAppearance(settings);
 
     document.querySelectorAll("[data-proj-contour-mode]").forEach((btn) => {
       btn.addEventListener("click", (event) => {
@@ -2115,34 +1838,6 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         const next = { ...loadContourSettings(), mode };
         saveContourSettings(next);
         syncMode(mode);
-        applyAppearance(next);
-      });
-    });
-
-    document.querySelectorAll("[data-proj-grain-style]").forEach((btn) => {
-      btn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const grainStyle =
-          btn.dataset.projGrainStyle === "distressed" ? "distressed" : "digital";
-        let next = { ...loadContourSettings(), grainStyle };
-        // Switching to Digital Matrix always restores the immutable legacy look
-        if (grainStyle === "digital") next = applyDigitalMatrixLegacy(next);
-        saveContourSettings(next);
-        syncGrain(grainStyle);
-        // Refresh shared sliders to legacy values when returning to Digital
-        if (grainStyle === "digital") {
-          map.forEach(([id, outId, key, , , digits]) => {
-            if (key === "organicDistortion" || key === "textureBreakup") return;
-            const el = document.getElementById(id);
-            const out = document.getElementById(outId);
-            if (!el || next[key] == null) return;
-            el.value = String(next[key]);
-            if (out) out.textContent = Number(next[key]).toFixed(digits);
-          });
-          if (cColor) cColor.value = next.contourColor;
-          if (sColor) sColor.value = next.surfaceColor;
-        }
         applyAppearance(next);
       });
     });
