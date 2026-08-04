@@ -45,6 +45,29 @@
       </label>
       <button type="button" class="appearance-colours__reset" id="colour-reset">Reset Colours</button>
       <button type="button" class="appearance-colours__reset" id="colour-reference-light">Reference Light</button>
+      <div class="preset-row" aria-label="Colour presets">
+        <span class="preset-row__label">Colour presets</span>
+        <div class="preset-row__btns" id="colour-preset-btns">
+          <button type="button" class="preset-btn" data-colour-preset="black-white">Black &amp; White</button>
+          <button type="button" class="preset-btn" data-colour-preset="cream-orange">Cream &amp; Orange</button>
+          <button type="button" class="preset-btn" data-colour-preset="cyan-future">Cyan Future</button>
+          <button type="button" class="preset-btn" data-colour-preset="sunset-blaze">Sunset Blaze</button>
+        </div>
+        <output class="preset-row__status" id="colour-preset-status">Custom</output>
+      </div>
+      <button type="button" class="appearance-colours__reset appearance-colours__reset--accent" id="load-original-bw">Load Original B&amp;W</button>
+    </section>
+
+    <section class="appearance-settings-presets" id="appearance-settings-presets" aria-label="Settings presets">
+      <h2 class="appearance-visibility__title">SETTINGS PRESETS</h2>
+      <div class="preset-row">
+        <div class="preset-row__btns" id="settings-preset-btns">
+          <button type="button" class="preset-btn" data-settings-preset="original-mono">Original Mono</button>
+          <button type="button" class="preset-btn" data-settings-preset="current-screenshot">Current Screenshot</button>
+          <button type="button" class="preset-btn" data-settings-preset="refined-hierarchy">Refined Hierarchy</button>
+        </div>
+        <output class="preset-row__status" id="settings-preset-status">Custom</output>
+      </div>
     </section>
 
     <section class="appearance-visibility" id="appearance-visibility" aria-label="Global visibility">
@@ -143,7 +166,7 @@
         <label class="float-tune-row"><span>X</span><output id="tune-about-x-val">2.70</output><input id="tune-about-x" type="range" min="-50" max="50" step="0.1" /></label>
         <label class="float-tune-row"><span>Z</span><output id="tune-about-z-val">-91.30</output><input id="tune-about-z" type="range" min="-160" max="80" step="0.1" /></label>
         <label class="float-tune-row"><span>Scale</span><output id="tune-about-scale-val">15.60</output><input id="tune-about-scale" type="range" min="0.1" max="24" step="0.05" /></label>
-        <label class="float-tune-row"><span>Immersion</span><output id="tune-about-immersion-val">0.50</output><input id="tune-about-immersion" type="range" min="0.05" max="0.55" step="0.01" /></label>
+        <label class="float-tune-row"><span>Immersion</span><output id="tune-about-immersion-val">0.45</output><input id="tune-about-immersion" type="range" min="0.05" max="0.55" step="0.01" /></label>
         <label class="float-tune-row"><span>Bob</span><output id="tune-about-bob-val">4.75</output><input id="tune-about-bob" type="range" min="0.2" max="6" step="0.05" /></label>
         <label class="float-tune-row"><span>Max tilt°</span><output id="tune-about-tilt-val">5.0</output><input id="tune-about-tilt" type="range" min="0" max="15" step="0.5" /></label>
         <label class="float-tune-row"><span>Rotate X°</span><output id="tune-about-rot-x-val">-71</output><input id="tune-about-rot-x" type="range" min="-180" max="180" step="1" /></label>

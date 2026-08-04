@@ -39,7 +39,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       x: 2.7,
       z: -91.3,
       scale: 15.6,
-      immersion: 0.5,
+      immersion: 0.45,
       immersionOffset: 0,
       bob: 4.75,
       maxTiltDeg: 5,
@@ -64,6 +64,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   const COMPOSITION_STORAGE_KEY = "stippled-ocean-float-tune-v4";
   const COMPOSITION_SEED_KEY = "stippled-ocean-preset-seed";
   const COMPOSITION_SEED_VALUE = "final-composition-v2";
+  const ABOUT_PLACEMENT_SEED_KEY = "stippled-ocean-about-placement-v045";
 
   // One-time clear of older/incorrect saved tuning so the corrected preset can take effect
   if (localStorage.getItem(COMPOSITION_SEED_KEY) !== COMPOSITION_SEED_VALUE) {
@@ -75,6 +76,26 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       COMPOSITION_STORAGE_KEY,
     ].forEach((key) => localStorage.removeItem(key));
     localStorage.setItem(COMPOSITION_SEED_KEY, COMPOSITION_SEED_VALUE);
+  }
+
+  // Targeted About placement migration (immersion 0.45) — does not wipe other models
+  function migrateAboutPlacement(comp) {
+    if (!comp?.about) return comp;
+    const a = FINAL_COMPOSITION.about;
+    comp.about = {
+      ...comp.about,
+      x: a.x,
+      z: a.z,
+      scale: a.scale,
+      immersion: a.immersion,
+      immersionOffset: a.immersionOffset,
+      bob: a.bob,
+      maxTiltDeg: a.maxTiltDeg,
+      rotXDeg: a.rotXDeg,
+      rotYDeg: a.rotYDeg,
+      rotZDeg: a.rotZDeg,
+    };
+    return comp;
   }
 
   function cloneComposition(src) {
@@ -94,7 +115,12 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   }
 
   const storedComposition = loadStoredComposition();
-  const activeComposition = storedComposition || cloneComposition(FINAL_COMPOSITION);
+  let activeComposition = storedComposition || cloneComposition(FINAL_COMPOSITION);
+  if (localStorage.getItem(ABOUT_PLACEMENT_SEED_KEY) !== "1") {
+    activeComposition = migrateAboutPlacement(activeComposition);
+    localStorage.setItem(COMPOSITION_STORAGE_KEY, JSON.stringify(activeComposition));
+    localStorage.setItem(ABOUT_PLACEMENT_SEED_KEY, "1");
+  }
   if (!storedComposition) {
     localStorage.setItem(COMPOSITION_STORAGE_KEY, JSON.stringify(activeComposition));
   }
@@ -392,6 +418,19 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     return h;
   }
 
+  // Interaction splash vertical scale: previous single-splash peak ≈ 11.68
+  // (ring+core)×envelope×maxStrength×(2/3) with strength≈1.6.
+  // Was halved (0.5 → max ≈ 5.84); now 1.5× that ceiling (0.75 → max ≈ 8.76).
+  const SPLASH_DISP_SCALE = 0.75;
+  const SPLASH_PREV_MAX_HEIGHT = 11.68;
+  const SPLASH_MAX_HEIGHT = SPLASH_PREV_MAX_HEIGHT * SPLASH_DISP_SCALE;
+
+  function softCapSplashHeight(extra) {
+    if (!(extra > 0)) return 0;
+    // Smooth asymptotic ceiling — no flat plateau clipping
+    return SPLASH_MAX_HEIGHT * (1 - Math.exp(-extra / SPLASH_MAX_HEIGHT));
+  }
+
   function sampleSplashHeight(x, z, time, splashes) {
     let extra = 0;
     for (let i = 0; i < splashes.length; i++) {
@@ -411,7 +450,8 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       const core = Math.exp(-(dist * dist) / (radius * 0.35) ** 2) * (1 - life);
       extra += (ring * 2.8 + core * 4.5) * envelope * s.strength * (2 / 3);
     }
-    return extra;
+    extra *= SPLASH_DISP_SCALE;
+    return softCapSplashHeight(extra);
   }
 
   // ─── Shared GPU wave surface (lockstep with CPU sampleWaveHeight) ─────
@@ -483,6 +523,12 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         float ring = exp(-pow(dist - life * radius * 0.85, 2.0) / pow(radius * 0.22, 2.0));
         float core = exp(-(dist * dist) / pow(radius * 0.35, 2.0)) * (1.0 - life);
         extra += (ring * 2.8 + core * 4.5) * envelope * strength * (2.0 / 3.0);
+      }
+      // Halve splash vertical contribution + soft accumulated ceiling (lockstep with CPU)
+      extra *= ${SPLASH_DISP_SCALE.toFixed(4)};
+      float splashCap = ${SPLASH_MAX_HEIGHT.toFixed(4)};
+      if (extra > 0.0) {
+        extra = splashCap * (1.0 - exp(-extra / splashCap));
       }
       return extra;
     }
@@ -680,7 +726,142 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   const uniforms = material.uniforms;
   const ocean = new THREE.Points(geometry, material);
+  // Keep particle ocean slightly preferred in depth vs any depth-helper geometry
+  ocean.renderOrder = 1;
   scene.add(ocean);
+
+  // ─── Continuous water-depth prepass (invisible; beauty stays particles) ─
+  const WATER_DEPTH_BIAS = 0.12;
+  const waterDepthRT = new THREE.WebGLRenderTarget(1, 1, {
+    type: THREE.HalfFloatType,
+    format: THREE.RGBAFormat,
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    depthBuffer: true,
+    stencilBuffer: false,
+  });
+  waterDepthRT.texture.name = "waterDepthViewZ";
+
+  const waterDepthUniforms = {
+    uTime: uniforms.uTime,
+    uSplashCenters: uniforms.uSplashCenters,
+    uSplashData: uniforms.uSplashData,
+    uOceanCenter: uniforms.uOceanCenter,
+    uOceanRadius: uniforms.uOceanRadius,
+  };
+
+  const waterDepthMaterial = new THREE.ShaderMaterial({
+    uniforms: waterDepthUniforms,
+    colorWrite: true,
+    depthWrite: true,
+    depthTest: true,
+    side: THREE.DoubleSide,
+    fog: false,
+    vertexShader: /* glsl */ `
+      uniform float uTime;
+      uniform vec3 uSplashCenters[${MAX_SPLASHES}];
+      uniform float uSplashData[${MAX_SPLASHES * 4}];
+      uniform vec2 uOceanCenter;
+      uniform float uOceanRadius;
+      varying float vViewZ;
+      varying float vEdgeKeep;
+      ${WAVE_SURFACE_GLSL}
+      void main() {
+        vec3 pos = position;
+        // PlaneGeometry is XZ after rotateX; position.y is 0
+        vec2 xz = pos.xz + vec2(0.0, 0.0);
+        // Mesh is positioned at ocean centre in Z already — use world xz after modelMatrix
+        vec4 world = modelMatrix * vec4(pos.x, 0.0, pos.z, 1.0);
+        float y = oceanSurfaceY(world.xz, uTime);
+        world.y = y;
+        float radial = length(world.xz - vec2(uOceanCenter.x, uOceanCenter.y));
+        vEdgeKeep = 1.0 - step(uOceanRadius * 0.995, radial);
+        vec4 mv = viewMatrix * world;
+        vViewZ = -mv.z;
+        gl_Position = projectionMatrix * mv;
+        if (vEdgeKeep < 0.5) {
+          gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        }
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying float vViewZ;
+      varying float vEdgeKeep;
+      void main() {
+        if (vEdgeKeep < 0.5) discard;
+        // Store linear view-space distance (same convention as contour capture)
+        gl_FragColor = vec4(vViewZ, 0.0, 0.0, 1.0);
+      }
+    `,
+  });
+
+  const waterDepthGeom = new THREE.PlaneGeometry(
+    OCEAN_RADIUS * 2.02,
+    OCEAN_RADIUS * 2.02,
+    180,
+    180
+  );
+  waterDepthGeom.rotateX(-Math.PI / 2);
+  const waterDepthMesh = new THREE.Mesh(waterDepthGeom, waterDepthMaterial);
+  waterDepthMesh.position.set(0, 0, OCEAN_CENTER_Z);
+  waterDepthMesh.frustumCulled = false;
+  const waterDepthScene = new THREE.Scene();
+  waterDepthScene.add(waterDepthMesh);
+
+  function resizeWaterDepthTarget() {
+    const w = Math.max(1, Math.floor(window.innerWidth * renderer.getPixelRatio()));
+    const h = Math.max(1, Math.floor(window.innerHeight * renderer.getPixelRatio()));
+    waterDepthRT.setSize(w, h);
+  }
+  resizeWaterDepthTarget();
+
+  function renderWaterDepthPass() {
+    renderer.setRenderTarget(waterDepthRT);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear(true, true, true);
+    renderer.render(waterDepthScene, activeCamera);
+    renderer.setRenderTarget(null);
+    if (typeof applyBackgroundColour === "function") {
+      applyBackgroundColour(getAppearanceColours().background);
+    }
+  }
+
+  function makeWaterDepthUniforms() {
+    return {
+      tWaterDepth: { value: waterDepthRT.texture },
+      uWaterDepthRes: {
+        value: new THREE.Vector2(waterDepthRT.width, waterDepthRT.height),
+      },
+      uWaterDepthBias: { value: WATER_DEPTH_BIAS },
+    };
+  }
+
+  const WATER_DEPTH_UNIFORMS_GLSL = /* glsl */ `
+    uniform sampler2D tWaterDepth;
+    uniform vec2 uWaterDepthRes;
+    uniform float uWaterDepthBias;
+  `;
+
+  const WATER_DEPTH_OCCLUDE_GLSL = /* glsl */ `
+    bool behindWaterCrest(float viewZ) {
+      vec2 uv = gl_FragCoord.xy / max(uWaterDepthRes, vec2(1.0));
+      float wZ = texture2D(tWaterDepth, uv).r;
+      return (wZ > 0.02 && viewZ > wZ + uWaterDepthBias);
+    }
+  `;
+
+  function syncWaterDepthUniformTargets(targetUniforms) {
+    if (!targetUniforms) return;
+    if (targetUniforms.tWaterDepth) {
+      targetUniforms.tWaterDepth.value = waterDepthRT.texture;
+    }
+    if (targetUniforms.uWaterDepthRes) {
+      targetUniforms.uWaterDepthRes.value.set(
+        waterDepthRT.width,
+        waterDepthRT.height
+      );
+    }
+  }
 
   // Shared references so body clipping stays lockstep with ocean displacement
   function makeWaveClipUniforms() {
@@ -900,6 +1081,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     applyBackgroundColour(appearanceColours.background);
     applyBodiesColour(appearanceColours.bodies);
     applyWavesColour(appearanceColours.waves);
+    if (typeof updatePresetUI === "function") updatePresetUI();
   }
 
   // ─── Global visibility (appearance-only; separate from composition) ───
@@ -1071,6 +1253,354 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   function getMarkSettings() {
     return appearanceMark;
+  }
+
+  // Colour presets (immutable). Applying goes through applyAppearanceColours only.
+  const COLOUR_PRESETS = Object.freeze({
+    "black-white": Object.freeze({
+      background: "#000000",
+      bodies: "#f4efe6",
+      waves: "#fffcf3",
+    }),
+    "cream-orange": Object.freeze({
+      background: "#f8e8ce",
+      bodies: "#d14a21",
+      waves: "#0873b5",
+    }),
+    "cyan-future": Object.freeze({
+      background: "#000000",
+      bodies: "#20cccf",
+      waves: "#ffffff",
+    }),
+    "sunset-blaze": Object.freeze({
+      background: "#f75636",
+      bodies: "#ffffff",
+      waves: "#2c152d",
+    }),
+  });
+
+  // Settings presets — visibility + mark-making + shared contour appearance only.
+  // Original Mono recovered from VISIBILITY_ORIGINALS, MARK_ORIGINALS, and
+  // CONTOUR_DEFAULTS (identical in aa420c4 / abf8565 / bd83b33 checkpoints).
+  const SETTINGS_PRESETS = Object.freeze({
+    "original-mono": Object.freeze({
+      visibility: Object.freeze({ ...VISIBILITY_ORIGINALS }),
+      mark: Object.freeze({ ...MARK_ORIGINALS }),
+      contour: Object.freeze({
+        mode: "contour",
+        edgeThreshold: CONTOUR_DEFAULTS.edgeThreshold,
+        contourCssPx: CONTOUR_DEFAULTS.contourCssPx,
+        surfaceCssPx: CONTOUR_DEFAULTS.surfaceCssPx,
+        debug: "final",
+        stippleSpacing: CONTOUR_DEFAULTS.stippleSpacing,
+        surfaceDensity: CONTOUR_DEFAULTS.surfaceDensity,
+      }),
+    }),
+    "current-screenshot": Object.freeze({
+      visibility: Object.freeze({
+        bodiesOpacity: 1,
+        silhouette: 0.9,
+        internal: 0.55,
+        surfaceStrength: 0.25,
+        wavesOpacity: 1,
+        contrastGuide: false,
+      }),
+      mark: Object.freeze({
+        surfaceDensity: 1.15,
+        contourDensity: 1.95,
+        contourWidth: 0.9,
+        organicIrregularity: 0.12,
+        bodyDotScale: 1.3,
+        waveParticleDensity: 6,
+        waveRidgeEmphasis: 0,
+        waveRidgeWidth: 1,
+        waveDotScale: 1.5,
+      }),
+      contour: Object.freeze({
+        mode: "contour",
+        edgeThreshold: 0.45,
+        contourCssPx: 0.9,
+        surfaceCssPx: 0.65,
+        debug: "final",
+        stippleSpacing: CONTOUR_DEFAULTS.stippleSpacing,
+        surfaceDensity: CONTOUR_DEFAULTS.surfaceDensity,
+      }),
+    }),
+    "refined-hierarchy": Object.freeze({
+      visibility: Object.freeze({
+        bodiesOpacity: 1,
+        silhouette: 1.15,
+        internal: 0.7,
+        surfaceStrength: 0.25,
+        wavesOpacity: 1,
+        contrastGuide: false,
+      }),
+      mark: Object.freeze({
+        surfaceDensity: 1.75,
+        contourDensity: 2.75,
+        contourWidth: 1.2,
+        organicIrregularity: 0.28,
+        bodyDotScale: 1.35,
+        waveParticleDensity: 3.75,
+        waveRidgeEmphasis: 2.1,
+        waveRidgeWidth: 1.35,
+        waveDotScale: 1.35,
+      }),
+      contour: Object.freeze({
+        mode: "contour",
+        edgeThreshold: 0.45,
+        contourCssPx: 0.9,
+        surfaceCssPx: 0.65,
+        debug: "final",
+        stippleSpacing: CONTOUR_DEFAULTS.stippleSpacing,
+        surfaceDensity: CONTOUR_DEFAULTS.surfaceDensity,
+      }),
+    }),
+  });
+
+  function coloursMatchPreset(colours, preset) {
+    return (
+      normalizeHexColour(colours.background, "") === preset.background &&
+      normalizeHexColour(colours.bodies, "") === preset.bodies &&
+      normalizeHexColour(colours.waves, "") === preset.waves
+    );
+  }
+
+  function nearEq(a, b, eps = 0.001) {
+    return Math.abs(Number(a) - Number(b)) <= eps;
+  }
+
+  function settingsMatchPreset(vis, mark, contour, preset) {
+    const pv = preset.visibility;
+    const pm = preset.mark;
+    const pc = preset.contour;
+    const visOk =
+      nearEq(vis.bodiesOpacity, pv.bodiesOpacity) &&
+      nearEq(vis.silhouette, pv.silhouette) &&
+      nearEq(vis.internal, pv.internal) &&
+      nearEq(vis.surfaceStrength, pv.surfaceStrength) &&
+      nearEq(vis.wavesOpacity, pv.wavesOpacity) &&
+      !!vis.contrastGuide === !!pv.contrastGuide;
+    const markOk =
+      nearEq(mark.surfaceDensity, pm.surfaceDensity) &&
+      nearEq(mark.contourDensity, pm.contourDensity) &&
+      nearEq(mark.contourWidth, pm.contourWidth) &&
+      nearEq(mark.organicIrregularity, pm.organicIrregularity) &&
+      nearEq(mark.bodyDotScale, pm.bodyDotScale) &&
+      nearEq(mark.waveParticleDensity, pm.waveParticleDensity) &&
+      nearEq(mark.waveRidgeEmphasis, pm.waveRidgeEmphasis) &&
+      nearEq(mark.waveRidgeWidth, pm.waveRidgeWidth) &&
+      nearEq(mark.waveDotScale, pm.waveDotScale);
+    const contourOk =
+      contour.mode === pc.mode &&
+      nearEq(contour.edgeThreshold, pc.edgeThreshold) &&
+      nearEq(contour.contourCssPx, pc.contourCssPx) &&
+      nearEq(contour.surfaceCssPx, pc.surfaceCssPx) &&
+      contour.debug === pc.debug;
+    return visOk && markOk && contourOk;
+  }
+
+  function detectColourPresetId() {
+    const colours = getAppearanceColours();
+    for (const [id, preset] of Object.entries(COLOUR_PRESETS)) {
+      if (coloursMatchPreset(colours, preset)) return id;
+    }
+    return "custom";
+  }
+
+  function detectSettingsPresetId() {
+    const vis = getVisibilitySettings();
+    const mark = getMarkSettings();
+    const contour = getSharedContourSettings();
+    for (const [id, preset] of Object.entries(SETTINGS_PRESETS)) {
+      if (settingsMatchPreset(vis, mark, contour, preset)) return id;
+    }
+    return "custom";
+  }
+
+  function updatePresetUI() {
+    const colourId = detectColourPresetId();
+    const settingsId = detectSettingsPresetId();
+    document.querySelectorAll("[data-colour-preset]").forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.colourPreset === colourId);
+    });
+    document.querySelectorAll("[data-settings-preset]").forEach((btn) => {
+      btn.classList.toggle(
+        "is-active",
+        btn.dataset.settingsPreset === settingsId
+      );
+    });
+    const cStatus = document.getElementById("colour-preset-status");
+    const sStatus = document.getElementById("settings-preset-status");
+    if (cStatus) {
+      cStatus.textContent =
+        colourId === "custom"
+          ? "Custom"
+          : btnLabelForColourPreset(colourId);
+    }
+    if (sStatus) {
+      sStatus.textContent =
+        settingsId === "custom"
+          ? "Custom"
+          : btnLabelForSettingsPreset(settingsId);
+    }
+  }
+
+  function btnLabelForColourPreset(id) {
+    return (
+      {
+        "black-white": "Black & White",
+        "cream-orange": "Cream & Orange",
+        "cyan-future": "Cyan Future",
+        "sunset-blaze": "Sunset Blaze",
+      }[id] || id
+    );
+  }
+
+  function btnLabelForSettingsPreset(id) {
+    return (
+      {
+        "original-mono": "Original Mono",
+        "current-screenshot": "Current Screenshot",
+        "refined-hierarchy": "Refined Hierarchy",
+      }[id] || id
+    );
+  }
+
+  function syncColourFieldsFromState() {
+    const colours = getAppearanceColours();
+    ["background", "bodies", "waves"].forEach((key) => {
+      const swatch = document.getElementById("colour-" + key);
+      const hexField = document.getElementById("colour-" + key + "-hex");
+      if (swatch) swatch.value = colours[key];
+      if (hexField) hexField.value = colours[key];
+    });
+  }
+
+  function syncVisibilityFieldsFromState() {
+    const vis = getVisibilitySettings();
+    const set = (id, outId, value, digits) => {
+      const el = document.getElementById(id);
+      const out = document.getElementById(outId);
+      if (el) el.value = String(value);
+      if (out) out.textContent = Number(value).toFixed(digits);
+    };
+    set("vis-bodies-opacity", "vis-bodies-opacity-val", vis.bodiesOpacity, 2);
+    set("vis-silhouette", "vis-silhouette-val", vis.silhouette, 2);
+    set("vis-internal", "vis-internal-val", vis.internal, 2);
+    set("vis-surface", "vis-surface-val", vis.surfaceStrength, 2);
+    set("vis-waves-opacity", "vis-waves-opacity-val", vis.wavesOpacity, 2);
+    document.querySelectorAll("[data-contrast-guide]").forEach((btn) => {
+      const on = btn.dataset.contrastGuide === "on";
+      btn.classList.toggle("is-active", on === vis.contrastGuide);
+    });
+  }
+
+  function syncMarkFieldsFromState() {
+    const mark = getMarkSettings();
+    const set = (id, outId, value, digits) => {
+      const el = document.getElementById(id);
+      const out = document.getElementById(outId);
+      if (el) el.value = String(value);
+      if (out) out.textContent = Number(value).toFixed(digits);
+    };
+    set("mark-surface-density", "mark-surface-density-val", mark.surfaceDensity, 2);
+    set("mark-contour-density", "mark-contour-density-val", mark.contourDensity, 2);
+    set("mark-contour-width", "mark-contour-width-val", mark.contourWidth, 2);
+    set("mark-organic", "mark-organic-val", mark.organicIrregularity, 2);
+    set("mark-body-dot-scale", "mark-body-dot-scale-val", mark.bodyDotScale, 2);
+    set("mark-wave-density", "mark-wave-density-val", mark.waveParticleDensity, 2);
+    set("mark-wave-ridge", "mark-wave-ridge-val", mark.waveRidgeEmphasis, 2);
+    set("mark-wave-ridge-width", "mark-wave-ridge-width-val", mark.waveRidgeWidth, 2);
+    set("mark-wave-dot-scale", "mark-wave-dot-scale-val", mark.waveDotScale, 2);
+    updateMarkPerfWarnings();
+  }
+
+  function syncContourAppearanceFieldsFromState() {
+    const s = getSharedContourSettings();
+    const map = [
+      ["tune-proj-contour-thresh", "tune-proj-contour-thresh-val", "edgeThreshold", 2],
+      ["tune-proj-contour-csize", "tune-proj-contour-csize-val", "contourCssPx", 1],
+      ["tune-proj-contour-ssize", "tune-proj-contour-ssize-val", "surfaceCssPx", 2],
+    ];
+    map.forEach(([id, outId, key, digits]) => {
+      const el = document.getElementById(id);
+      const out = document.getElementById(outId);
+      if (el) el.value = String(s[key]);
+      if (out) out.textContent = Number(s[key]).toFixed(digits);
+    });
+    document.querySelectorAll("[data-contour-mode]").forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.contourMode === s.mode);
+    });
+    document.querySelectorAll("[data-contour-debug]").forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.contourDebug === s.debug);
+    });
+  }
+
+  function applySettingsPreset(id) {
+    const preset = SETTINGS_PRESETS[id];
+    if (!preset) return;
+    const visNext = { ...getVisibilitySettings(), ...preset.visibility };
+    const markNext = { ...preset.mark };
+    const contourNext = {
+      ...getSharedContourSettings(),
+      ...preset.contour,
+    };
+    saveVisibilitySettings(visNext);
+    applyVisibilitySettings(visNext);
+    saveMarkSettings(markNext);
+    applyMarkSettings(markNext);
+    sharedContourSettings = contourNext;
+    saveContourSettings(contourNext);
+    syncContourUniformsAll();
+    applyContourDisplayModeAll();
+    syncVisibilityFieldsFromState();
+    syncMarkFieldsFromState();
+    syncContourAppearanceFieldsFromState();
+    updateContrastGuideUI();
+    updatePresetUI();
+  }
+
+  function applyColourPreset(id) {
+    const preset = COLOUR_PRESETS[id];
+    if (!preset) return;
+    const next = {
+      background: preset.background,
+      bodies: preset.bodies,
+      waves: preset.waves,
+    };
+    saveAppearanceColours(next);
+    applyAppearanceColours(next);
+    syncColourFieldsFromState();
+    updateContrastGuideUI();
+    updatePresetUI();
+  }
+
+  function setupPresetControls() {
+    document.querySelectorAll("[data-colour-preset]").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        applyColourPreset(btn.dataset.colourPreset);
+      });
+    });
+    document.querySelectorAll("[data-settings-preset]").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        applySettingsPreset(btn.dataset.settingsPreset);
+      });
+    });
+    const loadBw = document.getElementById("load-original-bw");
+    if (loadBw) {
+      loadBw.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        applyColourPreset("black-white");
+        applySettingsPreset("original-mono");
+      });
+    }
+    updatePresetUI();
   }
 
   // Colour-space: THREE r160 enables ColorManagement by default. THREE.Color.set(hex)
@@ -1427,7 +1957,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   // Contour capture: view-space normal (rgb) + camera depth (a) — all contour models
   // Underwater fragments discarded using the shared oceanSurfaceY() before edges run.
-  const contourCaptureUniforms = makeWaveClipUniforms();
+  const contourCaptureUniforms = Object.assign(
+    makeWaveClipUniforms(),
+    makeWaterDepthUniforms()
+  );
   const contourCaptureMaterial = new THREE.ShaderMaterial({
     uniforms: contourCaptureUniforms,
     side: THREE.FrontSide,
@@ -1448,12 +1981,15 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     fragmentShader: /* glsl */ `
       ${WAVE_CLIP_UNIFORMS_GLSL}
       ${WAVE_SURFACE_GLSL}
+      ${WATER_DEPTH_UNIFORMS_GLSL}
+      ${WATER_DEPTH_OCCLUDE_GLSL}
       varying vec3 vViewNormal;
       varying float vViewZ;
       varying vec3 vWorldPos;
       void main() {
         float waterY = oceanSurfaceY(vWorldPos.xz, uTime);
         if (vWorldPos.y < waterY + uWaveClipBias) discard;
+        if (behindWaterCrest(vViewZ)) discard;
         vec3 n = normalize(vViewNormal);
         // Pack view normal; alpha = linear view depth (metres-ish)
         gl_FragColor = vec4(n * 0.5 + 0.5, vViewZ);
@@ -1748,7 +2284,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   const contourCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
   const depthOnlyMaterial = new THREE.ShaderMaterial({
-    uniforms: makeWaveClipUniforms(),
+    uniforms: Object.assign(makeWaveClipUniforms(), makeWaterDepthUniforms()),
     colorWrite: false,
     depthWrite: true,
     depthTest: true,
@@ -1756,19 +2292,26 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     fog: false,
     vertexShader: /* glsl */ `
       varying vec3 vWorldPos;
+      varying float vViewZ;
       void main() {
         vec4 world = modelMatrix * vec4(position, 1.0);
         vWorldPos = world.xyz;
-        gl_Position = projectionMatrix * viewMatrix * world;
+        vec4 mv = viewMatrix * world;
+        vViewZ = -mv.z;
+        gl_Position = projectionMatrix * mv;
       }
     `,
     fragmentShader: /* glsl */ `
       ${WAVE_CLIP_UNIFORMS_GLSL}
       ${WAVE_SURFACE_GLSL}
+      ${WATER_DEPTH_UNIFORMS_GLSL}
+      ${WATER_DEPTH_OCCLUDE_GLSL}
       varying vec3 vWorldPos;
+      varying float vViewZ;
       void main() {
         float waterY = oceanSurfaceY(vWorldPos.xz, uTime);
         if (vWorldPos.y < waterY + uWaveClipBias) discard;
+        if (behindWaterCrest(vViewZ)) discard;
         gl_FragColor = vec4(0.0);
       }
     `,
@@ -1784,32 +2327,39 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         shader.uniforms.uSplashCenters = uniforms.uSplashCenters;
         shader.uniforms.uSplashData = uniforms.uSplashData;
         shader.uniforms.uWaveClipBias = { value: WAVE_CLIP_BIAS };
+        Object.assign(shader.uniforms, makeWaterDepthUniforms());
         shader.vertexShader =
-          "varying vec3 vWaveWorldPos;\n" + shader.vertexShader;
+          "varying vec3 vWaveWorldPos;\nvarying float vWaveViewZ;\n" +
+          shader.vertexShader;
         shader.vertexShader = shader.vertexShader.replace(
           "#include <worldpos_vertex>",
           `#include <worldpos_vertex>
-           vWaveWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`
+           vWaveWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+           vWaveViewZ = -(modelViewMatrix * vec4(transformed, 1.0)).z;`
         );
         if (!shader.vertexShader.includes("vWaveWorldPos =")) {
           shader.vertexShader = shader.vertexShader.replace(
             "#include <project_vertex>",
             `#include <project_vertex>
-             vWaveWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`
+             vWaveWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+             vWaveViewZ = -mvPosition.z;`
           );
         }
         shader.fragmentShader =
           WAVE_CLIP_UNIFORMS_GLSL +
-          "\nvarying vec3 vWaveWorldPos;\n" +
+          "\nvarying vec3 vWaveWorldPos;\nvarying float vWaveViewZ;\n" +
           WAVE_SURFACE_GLSL +
+          WATER_DEPTH_UNIFORMS_GLSL +
+          WATER_DEPTH_OCCLUDE_GLSL +
           shader.fragmentShader;
         shader.fragmentShader = shader.fragmentShader.replace(
           "#include <clipping_planes_fragment>",
           `#include <clipping_planes_fragment>
-           if (vWaveWorldPos.y < oceanSurfaceY(vWaveWorldPos.xz, uTime) + uWaveClipBias) discard;`
+           if (vWaveWorldPos.y < oceanSurfaceY(vWaveWorldPos.xz, uTime) + uWaveClipBias) discard;
+           if (behindWaterCrest(vWaveViewZ)) discard;`
         );
       };
-      clone.customProgramCacheKey = () => "body-wave-clip-v1";
+      clone.customProgramCacheKey = () => "body-wave-clip-waterdepth-v2";
       return clone;
     });
     return Array.isArray(original) ? mapped : mapped[0];
@@ -1832,7 +2382,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   function createSurfaceStippleMaterial(settings) {
     return new THREE.ShaderMaterial({
-      uniforms: Object.assign(makeWaveClipUniforms(), {
+      uniforms: Object.assign(makeWaveClipUniforms(), makeWaterDepthUniforms(), {
         uCssPx: { value: settings.surfaceCssPx },
         uPixelRatio: { value: renderer.getPixelRatio() },
         uColor: { value: new THREE.Color(settings.surfaceColor) },
@@ -1872,6 +2422,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         varying float vAlpha;
         varying float vShade;
         varying vec3 vWorldPos;
+        varying float vViewZ;
 
         void main() {
           vec3 nView = normalize(normalMatrix * aNormal);
@@ -1881,6 +2432,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
           vec4 world = modelMatrix * vec4(position, 1.0);
           vWorldPos = world.xyz;
           vec4 mv = viewMatrix * world;
+          vViewZ = -mv.z;
           gl_Position = projectionMatrix * mv;
 
           float css = clamp(uCssPx * uBodyDotScale, 0.25, 8.0);
@@ -1911,14 +2463,18 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       fragmentShader: /* glsl */ `
         ${WAVE_CLIP_UNIFORMS_GLSL}
         ${WAVE_SURFACE_GLSL}
+        ${WATER_DEPTH_UNIFORMS_GLSL}
+        ${WATER_DEPTH_OCCLUDE_GLSL}
         uniform vec3 uColor;
         varying float vAlpha;
         varying float vShade;
         varying vec3 vWorldPos;
+        varying float vViewZ;
         void main() {
           if (vAlpha < 0.01) discard;
           float waterY = oceanSurfaceY(vWorldPos.xz, uTime);
           if (vWorldPos.y < waterY + uWaveClipBias) discard;
+          if (behindWaterCrest(vViewZ)) discard;
           vec2 uv = gl_PointCoord - 0.5;
           float d = length(uv);
           if (d > 0.5) discard;
@@ -2161,6 +2717,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
     syncContourUniformsAll();
     updateContrastGuideUI();
+    if (typeof updatePresetUI === "function") updatePresetUI();
   }
 
   function applyMarkSettings(settings) {
@@ -2189,6 +2746,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     };
     syncContourUniformsAll();
     updateMarkPerfWarnings();
+    if (typeof updatePresetUI === "function") updatePresetUI();
   }
 
   function syncContourUniformsAll() {
@@ -2757,6 +3315,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     setupColourControls();
     setupVisibilityControls();
     setupMarkMakingControls();
+    setupPresetControls();
   }
 
   function setupContourStippleControls() {
@@ -2767,6 +3326,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       });
       syncContourUniformsAll();
       applyContourDisplayModeAll();
+      if (typeof updatePresetUI === "function") updatePresetUI();
     };
 
     const syncMode = (mode) => {
@@ -3263,6 +3823,14 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       }
     });
     resizeContourTargets();
+    resizeWaterDepthTarget();
+    syncWaterDepthUniformTargets(contourCaptureUniforms);
+    syncWaterDepthUniformTargets(depthOnlyMaterial.uniforms);
+    floatingModels.forEach((state) => {
+      if (state.surfaceMaterial) {
+        syncWaterDepthUniformTargets(state.surfaceMaterial.uniforms);
+      }
+    });
   }
   window.addEventListener("resize", onResize);
 
@@ -3298,6 +3866,14 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     }
 
     syncContourWaveMatrices(activeCamera);
+    renderWaterDepthPass();
+    syncWaterDepthUniformTargets(contourCaptureUniforms);
+    syncWaterDepthUniformTargets(depthOnlyMaterial.uniforms);
+    contourModels.forEach((state) => {
+      if (state.surfaceMaterial) {
+        syncWaterDepthUniformTargets(state.surfaceMaterial.uniforms);
+      }
+    });
     const contourOn = renderContourPass();
 
     renderer.autoClear = true;

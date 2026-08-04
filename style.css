@@ -172,6 +172,72 @@ body:not(:has(.float-tune-chrome.is-hidden)) .float-tune-toggle {
   background: rgba(255, 255, 255, 0.08);
 }
 
+.appearance-colours__reset--accent {
+  border-color: rgba(255, 210, 120, 0.35);
+  color: rgba(255, 220, 160, 0.92);
+}
+
+.preset-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  margin-top: 0.2rem;
+}
+
+.preset-row__label {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 230, 190, 0.7);
+}
+
+.preset-row__btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.preset-btn {
+  padding: 0.22rem 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 236, 210, 0.82);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.55rem;
+  cursor: pointer;
+}
+
+.preset-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.preset-btn.is-active {
+  border-color: rgba(255, 210, 120, 0.45);
+  background: rgba(255, 210, 120, 0.18);
+  color: rgba(255, 236, 210, 0.95);
+}
+
+.preset-row__status {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.55rem;
+  color: rgba(255, 230, 190, 0.65);
+}
+
+.appearance-settings-presets {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  margin-bottom: 0.55rem;
+  padding: 0.45rem 0.5rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  user-select: none;
+}
+
 .appearance-visibility {
   flex-shrink: 0;
   display: flex;
