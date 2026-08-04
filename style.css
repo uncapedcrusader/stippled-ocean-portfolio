@@ -100,6 +100,150 @@ body:not(:has(.float-tune-chrome.is-hidden)) .float-tune-toggle {
   display: none;
 }
 
+.appearance-colours {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.55rem;
+  padding: 0.45rem 0.5rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  user-select: none;
+}
+
+.appearance-colours__title {
+  margin: 0 0 0.1rem;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 236, 210, 0.78);
+}
+
+.appearance-colours__row {
+  display: grid;
+  grid-template-columns: 4.6rem auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.4rem;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.62rem;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.appearance-colours__row input[type="color"] {
+  width: 1.85rem;
+  height: 1.1rem;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.appearance-colours__hex {
+  width: 100%;
+  max-width: 6.5rem;
+  padding: 0.15rem 0.3rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(255, 236, 210, 0.9);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.62rem;
+}
+
+.appearance-colours__reset {
+  align-self: flex-start;
+  margin-top: 0.1rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 236, 210, 0.8);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.58rem;
+  cursor: pointer;
+}
+
+.appearance-colours__reset:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.appearance-visibility {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  margin-bottom: 0.55rem;
+  padding: 0.45rem 0.5rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  user-select: none;
+}
+
+.appearance-visibility__title {
+  margin: 0 0 0.1rem;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 236, 210, 0.78);
+}
+
+.appearance-visibility .float-tune-row {
+  margin: 0;
+}
+
+.appearance-visibility .float-tune-mode {
+  margin-top: 0.15rem;
+}
+
+.contrast-guide-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0.15rem 0 0.1rem;
+  padding: 0.35rem 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.contrast-guide-panel[hidden] {
+  display: none;
+}
+
+.contrast-guide-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.58rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.contrast-guide-row output {
+  color: rgba(255, 236, 210, 0.88);
+  font-variant-numeric: tabular-nums;
+}
+
+.contrast-guide-row output[data-status="clear"] {
+  color: rgba(170, 220, 160, 0.95);
+}
+
+.contrast-guide-row output[data-status="marginal"] {
+  color: rgba(230, 200, 120, 0.95);
+}
+
+.contrast-guide-row output[data-status="low"] {
+  color: rgba(230, 140, 120, 0.95);
+}
+
 .view-bar {
   display: flex;
   flex-direction: column;

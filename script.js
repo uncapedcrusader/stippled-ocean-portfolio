@@ -412,6 +412,86 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     return extra;
   }
 
+  // ─── Shared GPU wave surface (lockstep with CPU sampleWaveHeight) ─────
+  // Injected into ocean displacement AND body underwater clipping shaders.
+  const WAVE_SURFACE_GLSL = /* glsl */ `
+    float waveHash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
+    float waveNoise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      float a = waveHash(i);
+      float b = waveHash(i + vec2(1.0, 0.0));
+      float c = waveHash(i + vec2(0.0, 1.0));
+      float d = waveHash(i + vec2(1.0, 1.0));
+      vec2 u = f * f * (3.0 - 2.0 * f);
+      return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+    }
+
+    float waveFbm(vec2 p) {
+      float v = 0.0;
+      float a = 0.5;
+      float f = 1.0;
+      float m = 0.0;
+      for (int i = 0; i < 4; i++) {
+        v += waveNoise(p * f) * a;
+        m += a;
+        a *= 0.5;
+        f *= 2.02;
+      }
+      return v / m;
+    }
+
+    float waveHeight(vec2 xz, float t) {
+      float driftX = t * 0.17;
+      float driftZ = t * 0.2;
+      float h = 0.0;
+      h += (waveFbm(xz * 0.07 + vec2(driftX, driftZ)) - 0.5) * 2.95;
+      h += (waveFbm(xz * 0.18 + vec2(driftX * 1.3, driftZ * 1.1)) - 0.5) * 1.15;
+      h += (waveFbm(xz * 0.34 + vec2(-driftX * 0.55, driftZ * 1.25)) - 0.5) * 0.32;
+      float crest = max(h, 0.0);
+      h += crest * crest * 0.28;
+      if (h > 1.35) {
+        float chop = waveNoise(xz * 1.6 + vec2(t * 0.45, t * 0.3));
+        h += (h - 1.35) * chop * 0.55;
+      }
+      return h;
+    }
+
+    float splashHeight(vec2 xz, float t) {
+      float extra = 0.0;
+      for (int i = 0; i < ${MAX_SPLASHES}; i++) {
+        vec3 c = uSplashCenters[i];
+        if (c.y < -100.0) continue;
+        float sTime = uSplashData[i * 4 + 0];
+        float strength = uSplashData[i * 4 + 1];
+        float radius = uSplashData[i * 4 + 2];
+        float duration = uSplashData[i * 4 + 3];
+        float age = t - sTime;
+        if (age < 0.0 || age > duration) continue;
+        vec2 d = xz - c.xz;
+        float toward = max(d.y, 0.0);
+        float away = min(d.y, 0.0);
+        float dist = sqrt(d.x * d.x + toward * toward * 2.4 + away * away * 0.55);
+        if (dist > radius * 1.45) continue;
+        float life = age / duration;
+        float envelope = sin(3.14159265 * min(life * 1.15, 1.0)) * (1.0 - life * 0.35);
+        float ring = exp(-pow(dist - life * radius * 0.85, 2.0) / pow(radius * 0.22, 2.0));
+        float core = exp(-(dist * dist) / pow(radius * 0.35, 2.0)) * (1.0 - life);
+        extra += (ring * 2.8 + core * 4.5) * envelope * strength * (2.0 / 3.0);
+      }
+      return extra;
+    }
+
+    float oceanSurfaceY(vec2 xz, float t) {
+      return waveHeight(xz, t) + splashHeight(xz, t);
+    }
+  `;
+
+  const WAVE_CLIP_BIAS = 0.035;
+
   // ─── Particle geometry (circular disk) ──────────────────────────────
   const positions = new Float32Array(PARTICLE_COUNT * 3);
   const seeds = new Float32Array(PARTICLE_COUNT);
@@ -442,6 +522,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     uOceanRadius: { value: OCEAN_RADIUS },
     uSplashCenters: { value: splashCenters },
     uSplashData: { value: splashData },
+    // Runtime initial ocean grain colour (was hardcoded vec3(1.0, 0.97, 0.9))
+    uWaveColor: { value: new THREE.Color(1.0, 0.97, 0.9) },
+    uWaveOpacity: { value: 1 },
+    uWaveDotScale: { value: 1 },
   };
 
   const material = new THREE.ShaderMaterial({
@@ -461,96 +545,14 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       uniform float uOceanRadius;
       uniform vec3 uSplashCenters[${MAX_SPLASHES}];
       uniform float uSplashData[${MAX_SPLASHES * 4}];
+      uniform float uWaveDotScale;
 
       varying float vAlpha;
       varying float vBright;
 
       #include <fog_pars_vertex>
 
-      // Value-noise style hash / noise (GPU)
-      float hash(vec2 p) {
-        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-      }
-
-      float noise(vec2 p) {
-        vec2 i = floor(p);
-        vec2 f = fract(p);
-        float a = hash(i);
-        float b = hash(i + vec2(1.0, 0.0));
-        float c = hash(i + vec2(0.0, 1.0));
-        float d = hash(i + vec2(1.0, 1.0));
-        vec2 u = f * f * (3.0 - 2.0 * f);
-        return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
-      }
-
-      float fbm(vec2 p) {
-        // Shared with CPU fbm() / sampleWaveHeight() — keep in lockstep.
-        float v = 0.0;
-        float a = 0.5;
-        float f = 1.0;
-        float m = 0.0;
-        for (int i = 0; i < 4; i++) {
-          v += noise(p * f) * a;
-          m += a;
-          a *= 0.5;
-          f *= 2.02;
-        }
-        return v / m;
-      }
-
-      float waveHeight(vec2 xz, float t) {
-        // Shared ocean surface (must match CPU sampleWaveHeight).
-        // Drift so crests travel toward -Z (away from the camera at +Z)
-        float driftX = t * 0.17;
-        float driftZ = t * 0.2;
-
-        float h = 0.0;
-        // Energetic rolling swells — closer to the dynamic look, without needle spikes
-        h += (fbm(xz * 0.07 + vec2(driftX, driftZ)) - 0.5) * 2.95;
-        h += (fbm(xz * 0.18 + vec2(driftX * 1.3, driftZ * 1.1)) - 0.5) * 1.15;
-        h += (fbm(xz * 0.34 + vec2(-driftX * 0.55, driftZ * 1.25)) - 0.5) * 0.32;
-
-        float crest = max(h, 0.0);
-        h += crest * crest * 0.28;
-
-        // Light crest chop for life — low amplitude, mid frequency (not spike spray)
-        if (h > 1.35) {
-          float chop = noise(xz * 1.6 + vec2(t * 0.45, t * 0.3));
-          h += (h - 1.35) * chop * 0.55;
-        }
-
-        return h;
-      }
-
-      float splashHeight(vec2 xz, float t) {
-        float extra = 0.0;
-        for (int i = 0; i < ${MAX_SPLASHES}; i++) {
-          vec3 c = uSplashCenters[i];
-          if (c.y < -100.0) continue;
-
-          float sTime = uSplashData[i * 4 + 0];
-          float strength = uSplashData[i * 4 + 1];
-          float radius = uSplashData[i * 4 + 2];
-          float duration = uSplashData[i * 4 + 3];
-
-          float age = t - sTime;
-          if (age < 0.0 || age > duration) continue;
-
-          vec2 d = xz - c.xz;
-          // Anisotropic distance: expand farther away from camera than toward it
-          float toward = max(d.y, 0.0);
-          float away = min(d.y, 0.0);
-          float dist = sqrt(d.x * d.x + toward * toward * 2.4 + away * away * 0.55);
-          if (dist > radius * 1.45) continue;
-
-          float life = age / duration;
-          float envelope = sin(3.14159265 * min(life * 1.15, 1.0)) * (1.0 - life * 0.35);
-          float ring = exp(-pow(dist - life * radius * 0.85, 2.0) / pow(radius * 0.22, 2.0));
-          float core = exp(-(dist * dist) / pow(radius * 0.35, 2.0)) * (1.0 - life);
-          extra += (ring * 2.8 + core * 4.5) * envelope * strength * (2.0 / 3.0);
-        }
-        return extra;
-      }
+      ${WAVE_SURFACE_GLSL}
 
       void main() {
         vec3 pos = position;
@@ -606,13 +608,15 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         float size = mix(1.0, 2.35, pow(heightNorm, 1.4));
         size *= mix(0.7, 1.1, depthFade) * mix(0.55, 1.0, edgeFade);
         size += splash * 0.18;
-        gl_PointSize = size * uPixelRatio * (45.0 / -mvPosition.z);
+        gl_PointSize = size * uPixelRatio * (45.0 / -mvPosition.z) * uWaveDotScale;
         gl_PointSize = clamp(gl_PointSize, 0.6 * uPixelRatio, 4.5 * uPixelRatio);
       }
     `,
     fragmentShader: /* glsl */ `
       varying float vAlpha;
       varying float vBright;
+      uniform vec3 uWaveColor;
+      uniform float uWaveOpacity;
 
       #include <fog_pars_fragment>
 
@@ -625,9 +629,9 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         if (d > 0.5) discard;
         float soft = 1.0 - smoothstep(0.15, 0.5, d);
 
-        // Near-white with a slight gold hint
-        vec3 col = vec3(1.0, 0.97, 0.9);
-        float alpha = vAlpha * soft * vBright;
+        // RGB = selected wave colour (no strength multiply). Opacity via alpha only.
+        vec3 col = uWaveColor;
+        float alpha = vAlpha * soft * vBright * uWaveOpacity;
         gl_FragColor = vec4(col, alpha);
 
         #include <fog_fragment>
@@ -638,6 +642,23 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   const uniforms = material.uniforms;
   const ocean = new THREE.Points(geometry, material);
   scene.add(ocean);
+
+  // Shared references so body clipping stays lockstep with ocean displacement
+  function makeWaveClipUniforms() {
+    return {
+      uTime: uniforms.uTime,
+      uSplashCenters: uniforms.uSplashCenters,
+      uSplashData: uniforms.uSplashData,
+      uWaveClipBias: { value: WAVE_CLIP_BIAS },
+    };
+  }
+
+  const WAVE_CLIP_UNIFORMS_GLSL = /* glsl */ `
+    uniform float uTime;
+    uniform vec3 uSplashCenters[${MAX_SPLASHES}];
+    uniform float uSplashData[${MAX_SPLASHES * 4}];
+    uniform float uWaveClipBias;
+  `;
 
   // Basic lights so the solid GLB is visible (ocean shader is unlit)
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
@@ -700,8 +721,8 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       const debugOk = ["final", "depth", "normals", "edges"].includes(p.debug);
       return {
         mode: p.mode === "solid" ? "solid" : "contour",
-        silhouette: THREE.MathUtils.clamp(Number(p.silhouette) ?? 0.9, 0, 1),
-        internal: THREE.MathUtils.clamp(Number(p.internal) ?? 0.55, 0, 1),
+        silhouette: THREE.MathUtils.clamp(Number(p.silhouette) ?? 0.9, 0, 1.5),
+        internal: THREE.MathUtils.clamp(Number(p.internal) ?? 0.55, 0, 1.5),
         edgeThreshold: THREE.MathUtils.clamp(
           Number(p.edgeThreshold) ?? 0.45,
           0.05,
@@ -720,7 +741,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         surfaceStrength: THREE.MathUtils.clamp(
           Number(p.surfaceStrength) ?? 0.25,
           0,
-          0.6
+          0.8
         ),
         surfaceCssPx: THREE.MathUtils.clamp(
           Number(p.surfaceCssPx) ?? 0.65,
@@ -751,6 +772,396 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     localStorage.setItem(CONTOUR_STORAGE_KEY, JSON.stringify(settings));
   }
 
+  // ─── Global appearance colours (separate from composition storage) ───
+  const COLOUR_STORAGE_KEY = "stippled-ocean-appearance-colours-v1";
+  // Detected from runtime before this feature — do not invent new look
+  const COLOUR_ORIGINALS = Object.freeze({
+    background: "#000000",
+    bodies: CONTOUR_DEFAULTS.contourColor, // was contour stipple base hue
+    waves: "#" + uniforms.uWaveColor.value.getHexString(), // was vec3(1,0.97,0.9)
+  });
+
+  function normalizeHexColour(value, fallback) {
+    if (typeof value !== "string") return fallback;
+    const v = value.trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) return v.toLowerCase();
+    if (/^[0-9a-fA-F]{6}$/.test(v)) return `#${v.toLowerCase()}`;
+    return fallback;
+  }
+
+  function deriveSurfaceHexFromBodies(bodiesHex) {
+    // Same authoritative Bodies hue — ghost hierarchy is alpha (surface strength), not a darker hex
+    return bodiesHex;
+  }
+
+  function loadAppearanceColours() {
+    try {
+      const raw = localStorage.getItem(COLOUR_STORAGE_KEY);
+      if (!raw) return { ...COLOUR_ORIGINALS };
+      const p = JSON.parse(raw);
+      return {
+        background: normalizeHexColour(p.background, COLOUR_ORIGINALS.background),
+        bodies: normalizeHexColour(p.bodies, COLOUR_ORIGINALS.bodies),
+        waves: normalizeHexColour(p.waves, COLOUR_ORIGINALS.waves),
+      };
+    } catch (_) {
+      return { ...COLOUR_ORIGINALS };
+    }
+  }
+
+  function saveAppearanceColours(colours) {
+    localStorage.setItem(COLOUR_STORAGE_KEY, JSON.stringify(colours));
+  }
+
+  let appearanceColours = loadAppearanceColours();
+
+  function getAppearanceColours() {
+    return appearanceColours;
+  }
+
+  function applyBackgroundColour(hex) {
+    const c = new THREE.Color(hex);
+    renderer.setClearColor(c, 1);
+    if (scene.fog) scene.fog.color.copy(c);
+    document.documentElement.style.background = hex;
+    document.body.style.background = hex;
+  }
+
+  function applyBodiesColour(hex) {
+    contourCompositeUniforms.uContourColor.value.set(hex);
+    contourModels.forEach((state) => {
+      if (state.surfaceMaterial?.uniforms?.uColor) {
+        state.surfaceMaterial.uniforms.uColor.value.set(hex);
+      }
+    });
+    const s = getSharedContourSettings();
+    if (s.contourColor !== hex || s.surfaceColor !== hex) {
+      sharedContourSettings = {
+        ...s,
+        contourColor: hex,
+        surfaceColor: hex,
+      };
+    }
+  }
+
+  function applyWavesColour(hex) {
+    uniforms.uWaveColor.value.set(hex);
+  }
+
+  function applyAppearanceColours(colours) {
+    appearanceColours = {
+      background: normalizeHexColour(colours.background, COLOUR_ORIGINALS.background),
+      bodies: normalizeHexColour(colours.bodies, COLOUR_ORIGINALS.bodies),
+      waves: normalizeHexColour(colours.waves, COLOUR_ORIGINALS.waves),
+    };
+    applyBackgroundColour(appearanceColours.background);
+    applyBodiesColour(appearanceColours.bodies);
+    applyWavesColour(appearanceColours.waves);
+  }
+
+  // ─── Global visibility (appearance-only; separate from composition) ───
+  const VISIBILITY_STORAGE_KEY = "stippled-ocean-appearance-visibility-v1";
+  const VISIBILITY_ORIGINALS = Object.freeze({
+    bodiesOpacity: 1,
+    silhouette: CONTOUR_DEFAULTS.silhouette,
+    internal: CONTOUR_DEFAULTS.internal,
+    surfaceStrength: CONTOUR_DEFAULTS.surfaceStrength,
+    bodyDotScale: 1,
+    wavesOpacity: 1,
+    waveDotScale: 1,
+    contrastGuide: false,
+  });
+
+  const REFERENCE_LIGHT_COLOURS = Object.freeze({
+    background: "#f3e9d6",
+    bodies: "#bb4121",
+    waves: "#023b69",
+  });
+
+  function loadVisibilitySettings() {
+    try {
+      const raw = localStorage.getItem(VISIBILITY_STORAGE_KEY);
+      if (!raw) {
+        // First run: inherit existing contour strengths so look stays unchanged
+        const c = getSharedContourSettings();
+        return {
+          ...VISIBILITY_ORIGINALS,
+          silhouette: c.silhouette,
+          internal: c.internal,
+          surfaceStrength: c.surfaceStrength,
+        };
+      }
+      const p = JSON.parse(raw);
+      return {
+        bodiesOpacity: THREE.MathUtils.clamp(Number(p.bodiesOpacity) ?? 1, 0, 1),
+        silhouette: THREE.MathUtils.clamp(Number(p.silhouette) ?? 0.9, 0, 1.5),
+        internal: THREE.MathUtils.clamp(Number(p.internal) ?? 0.55, 0, 1.5),
+        surfaceStrength: THREE.MathUtils.clamp(
+          Number(p.surfaceStrength) ?? 0.25,
+          0,
+          0.8
+        ),
+        bodyDotScale: THREE.MathUtils.clamp(Number(p.bodyDotScale) ?? 1, 0.65, 1.35),
+        wavesOpacity: THREE.MathUtils.clamp(Number(p.wavesOpacity) ?? 1, 0, 1),
+        waveDotScale: THREE.MathUtils.clamp(Number(p.waveDotScale) ?? 1, 0.65, 1.5),
+        contrastGuide: p.contrastGuide === true,
+      };
+    } catch (_) {
+      return { ...VISIBILITY_ORIGINALS };
+    }
+  }
+
+  function saveVisibilitySettings(settings) {
+    localStorage.setItem(VISIBILITY_STORAGE_KEY, JSON.stringify(settings));
+  }
+
+  let appearanceVisibility = loadVisibilitySettings();
+
+  function getVisibilitySettings() {
+    return appearanceVisibility;
+  }
+
+  // Colour-space: THREE r160 enables ColorManagement by default. THREE.Color.set(hex)
+  // stores linear working values. All custom body/ocean ShaderMaterials share that
+  // uniform path (no extra per-shader sRGB encode). Renderer colour-management is
+  // left unchanged so Background / Bodies / Waves stay mutually consistent.
+
+  function srgbChannelToLinear(c) {
+    const v = c / 255;
+    return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  }
+
+  function relativeLuminanceFromHex(hex) {
+    // Prefer CSS hex digits (sRGB) rather than Three's linear .r for diagnostic guide
+    const raw = normalizeHexColour(hex, "#000000").slice(1);
+    const r = parseInt(raw.slice(0, 2), 16);
+    const g = parseInt(raw.slice(2, 4), 16);
+    const b = parseInt(raw.slice(4, 6), 16);
+    return (
+      0.2126 * srgbChannelToLinear(r) +
+      0.7152 * srgbChannelToLinear(g) +
+      0.0722 * srgbChannelToLinear(b)
+    );
+  }
+
+  function contrastRatio(l1, l2) {
+    const a = Math.max(l1, l2);
+    const b = Math.min(l1, l2);
+    return (a + 0.05) / (b + 0.05);
+  }
+
+  function contrastStatus(ratio) {
+    if (ratio >= 3) return "Clear";
+    if (ratio >= 2) return "Marginal";
+    return "Low";
+  }
+
+  function mixHexApprox(bgHex, fgHex, alpha) {
+    const a = THREE.MathUtils.clamp(alpha, 0, 1);
+    // Blend in sRGB byte space for a simple diagnostic composite estimate
+    const bgH = normalizeHexColour(bgHex, "#000000").slice(1);
+    const fgH = normalizeHexColour(fgHex, "#000000").slice(1);
+    const mixCh = (i) => {
+      const b = parseInt(bgH.slice(i, i + 2), 16);
+      const f = parseInt(fgH.slice(i, i + 2), 16);
+      return Math.round(f * a + b * (1 - a));
+    };
+    const toHex = (n) => n.toString(16).padStart(2, "0");
+    return `#${toHex(mixCh(0))}${toHex(mixCh(2))}${toHex(mixCh(4))}`;
+  }
+
+  function updateContrastGuideUI() {
+    const panel = document.getElementById("contrast-guide-panel");
+    if (!panel) return;
+    const vis = getVisibilitySettings();
+    panel.hidden = !vis.contrastGuide;
+    if (!vis.contrastGuide) return;
+
+    const colours = getAppearanceColours();
+    const bgL = relativeLuminanceFromHex(colours.background);
+    const wavesL = relativeLuminanceFromHex(colours.waves);
+    const bodiesL = relativeLuminanceFromHex(colours.bodies);
+
+    // Effective contour mark vs background: blend with typical silhouette coverage
+    const effectiveAlpha = THREE.MathUtils.clamp(
+      vis.bodiesOpacity * vis.silhouette * 0.85,
+      0,
+      1
+    );
+    const effectiveBodiesHex = mixHexApprox(
+      colours.background,
+      colours.bodies,
+      effectiveAlpha
+    );
+    const effectiveBodiesL = relativeLuminanceFromHex(effectiveBodiesHex);
+
+    const rows = [
+      ["contrast-bodies-bg", contrastRatio(effectiveBodiesL, bgL)],
+      ["contrast-waves-bg", contrastRatio(wavesL, bgL)],
+      ["contrast-bodies-waves", contrastRatio(bodiesL, wavesL)],
+    ];
+    rows.forEach(([id, ratio]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const status = contrastStatus(ratio);
+      el.textContent = `${status} (${ratio.toFixed(1)}:1)`;
+      el.dataset.status = status.toLowerCase();
+    });
+  }
+
+  function setupVisibilityControls() {
+    const root = document.getElementById("appearance-visibility");
+    if (!root) return;
+
+    const syncFields = (vis) => {
+      const set = (id, outId, value, digits) => {
+        const el = document.getElementById(id);
+        const out = document.getElementById(outId);
+        if (el) el.value = String(value);
+        if (out) out.textContent = Number(value).toFixed(digits);
+      };
+      set("vis-bodies-opacity", "vis-bodies-opacity-val", vis.bodiesOpacity, 2);
+      set("vis-silhouette", "vis-silhouette-val", vis.silhouette, 2);
+      set("vis-internal", "vis-internal-val", vis.internal, 2);
+      set("vis-surface", "vis-surface-val", vis.surfaceStrength, 2);
+      set("vis-body-dot-scale", "vis-body-dot-scale-val", vis.bodyDotScale, 2);
+      set("vis-waves-opacity", "vis-waves-opacity-val", vis.wavesOpacity, 2);
+      set("vis-wave-dot-scale", "vis-wave-dot-scale-val", vis.waveDotScale, 2);
+      document.querySelectorAll("[data-contrast-guide]").forEach((btn) => {
+        const on = btn.dataset.contrastGuide === "on";
+        btn.classList.toggle("is-active", on === vis.contrastGuide);
+      });
+      updateContrastGuideUI();
+    };
+
+    const bind = (id, outId, key, min, max, digits) => {
+      const el = document.getElementById(id);
+      const out = document.getElementById(outId);
+      if (!el) return;
+      el.addEventListener("input", () => {
+        const value = THREE.MathUtils.clamp(parseFloat(el.value) || min, min, max);
+        if (out) out.textContent = value.toFixed(digits);
+        const next = { ...getVisibilitySettings(), [key]: value };
+        saveVisibilitySettings(next);
+        applyVisibilitySettings(next);
+        syncFields(getVisibilitySettings());
+      });
+    };
+
+    bind("vis-bodies-opacity", "vis-bodies-opacity-val", "bodiesOpacity", 0, 1, 2);
+    bind("vis-silhouette", "vis-silhouette-val", "silhouette", 0, 1.5, 2);
+    bind("vis-internal", "vis-internal-val", "internal", 0, 1.5, 2);
+    bind("vis-surface", "vis-surface-val", "surfaceStrength", 0, 0.8, 2);
+    bind("vis-body-dot-scale", "vis-body-dot-scale-val", "bodyDotScale", 0.65, 1.35, 2);
+    bind("vis-waves-opacity", "vis-waves-opacity-val", "wavesOpacity", 0, 1, 2);
+    bind("vis-wave-dot-scale", "vis-wave-dot-scale-val", "waveDotScale", 0.65, 1.5, 2);
+
+    document.querySelectorAll("[data-contrast-guide]").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const on = btn.dataset.contrastGuide === "on";
+        const next = { ...getVisibilitySettings(), contrastGuide: on };
+        saveVisibilitySettings(next);
+        applyVisibilitySettings(next);
+        syncFields(getVisibilitySettings());
+      });
+    });
+
+    const resetBtn = document.getElementById("visibility-reset");
+    if (resetBtn) {
+      resetBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const next = { ...VISIBILITY_ORIGINALS };
+        saveVisibilitySettings(next);
+        applyVisibilitySettings(next);
+        syncFields(next);
+      });
+    }
+
+    syncFields(getVisibilitySettings());
+  }
+
+  function setupColourControls() {
+    const root = document.getElementById("appearance-colours");
+    if (!root) return;
+
+    const bind = (key, swatchId, hexId) => {
+      const swatch = document.getElementById(swatchId);
+      const hexField = document.getElementById(hexId);
+      if (!swatch || !hexField) return;
+
+      const syncFields = (hex) => {
+        swatch.value = hex;
+        hexField.value = hex;
+      };
+      syncFields(appearanceColours[key]);
+
+      const commit = (raw) => {
+        const hex = normalizeHexColour(raw, appearanceColours[key]);
+        syncFields(hex);
+        const next = { ...getAppearanceColours(), [key]: hex };
+        saveAppearanceColours(next);
+        applyAppearanceColours(next);
+        updateContrastGuideUI();
+      };
+
+      swatch.addEventListener("input", () => commit(swatch.value));
+      hexField.addEventListener("input", () => {
+        const raw = hexField.value.trim();
+        if (/^#?[0-9a-fA-F]{6}$/.test(raw)) commit(raw);
+      });
+      hexField.addEventListener("change", () => commit(hexField.value));
+      hexField.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit(hexField.value);
+        }
+      });
+    };
+
+    bind("background", "colour-background", "colour-background-hex");
+    bind("bodies", "colour-bodies", "colour-bodies-hex");
+    bind("waves", "colour-waves", "colour-waves-hex");
+
+    const resetBtn = document.getElementById("colour-reset");
+    if (resetBtn) {
+      resetBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const next = { ...COLOUR_ORIGINALS };
+        saveAppearanceColours(next);
+        applyAppearanceColours(next);
+        ["background", "bodies", "waves"].forEach((key) => {
+          const swatch = document.getElementById(`colour-${key}`);
+          const hexField = document.getElementById(`colour-${key}-hex`);
+          if (swatch) swatch.value = next[key];
+          if (hexField) hexField.value = next[key];
+        });
+        updateContrastGuideUI();
+      });
+    }
+
+    const refBtn = document.getElementById("colour-reference-light");
+    if (refBtn) {
+      refBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const next = { ...REFERENCE_LIGHT_COLOURS };
+        saveAppearanceColours(next);
+        applyAppearanceColours(next);
+        ["background", "bodies", "waves"].forEach((key) => {
+          const swatch = document.getElementById(`colour-${key}`);
+          const hexField = document.getElementById(`colour-${key}-hex`);
+          if (swatch) swatch.value = next[key];
+          if (hexField) hexField.value = next[key];
+        });
+        updateContrastGuideUI();
+      });
+    }
+  }
+
   function seededUnitRandom(seed) {
     let a = seed >>> 0;
     return () => {
@@ -763,24 +1174,34 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   }
 
   // Contour capture: view-space normal (rgb) + camera depth (a) — all contour models
+  // Underwater fragments discarded using the shared oceanSurfaceY() before edges run.
+  const contourCaptureUniforms = makeWaveClipUniforms();
   const contourCaptureMaterial = new THREE.ShaderMaterial({
-    uniforms: {},
+    uniforms: contourCaptureUniforms,
     side: THREE.FrontSide,
     fog: false,
     vertexShader: /* glsl */ `
       varying vec3 vViewNormal;
       varying float vViewZ;
+      varying vec3 vWorldPos;
       void main() {
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vWorldPos = world.xyz;
+        vec4 mv = viewMatrix * world;
         vViewNormal = normalize(normalMatrix * normal);
         vViewZ = -mv.z;
         gl_Position = projectionMatrix * mv;
       }
     `,
     fragmentShader: /* glsl */ `
+      ${WAVE_CLIP_UNIFORMS_GLSL}
+      ${WAVE_SURFACE_GLSL}
       varying vec3 vViewNormal;
       varying float vViewZ;
+      varying vec3 vWorldPos;
       void main() {
+        float waterY = oceanSurfaceY(vWorldPos.xz, uTime);
+        if (vWorldPos.y < waterY + uWaveClipBias) discard;
         vec3 n = normalize(vViewNormal);
         // Pack view normal; alpha = linear view depth (metres-ish)
         gl_FragColor = vec4(n * 0.5 + 0.5, vViewZ);
@@ -810,7 +1231,22 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     uContourColor: { value: new THREE.Color(CONTOUR_DEFAULTS.contourColor) },
     uScreenRadius: { value: 80 },
     uDebug: { value: 0 },
+    uBodiesOpacity: { value: 1 },
+    uTime: uniforms.uTime,
+    uSplashCenters: uniforms.uSplashCenters,
+    uSplashData: uniforms.uSplashData,
+    uWaveClipBias: { value: WAVE_CLIP_BIAS },
+    uInvProjectionMatrix: { value: new THREE.Matrix4() },
+    uInvViewMatrix: { value: new THREE.Matrix4() },
+    uProjX: { value: 1 },
+    uProjY: { value: 1 },
+    uCamMode: { value: 0 }, // 0 perspective, 1 orthographic
+    uWaterlineBand: { value: 0.55 },
   };
+
+  // Apply appearance colours once composite uniforms exist (look matches pre-feature)
+  applyAppearanceColours(appearanceColours);
+  applyVisibilitySettings(appearanceVisibility);
 
   const contourCompositeMaterial = new THREE.ShaderMaterial({
     uniforms: contourCompositeUniforms,
@@ -838,6 +1274,15 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       uniform vec3 uContourColor;
       uniform float uScreenRadius;
       uniform int uDebug;
+      uniform float uBodiesOpacity;
+      ${WAVE_CLIP_UNIFORMS_GLSL}
+      uniform mat4 uInvProjectionMatrix;
+      uniform mat4 uInvViewMatrix;
+      uniform float uProjX;
+      uniform float uProjY;
+      uniform float uCamMode;
+      uniform float uWaterlineBand;
+      ${WAVE_SURFACE_GLSL}
 
       varying vec2 vUv;
 
@@ -848,6 +1293,31 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       float objectMask(vec4 s) {
         // Empty buffer cleared to 0; object has positive view depth
         return step(0.02, s.a);
+      }
+
+      vec3 reconstructWorld(vec2 uv, float viewZ) {
+        // viewZ = -mv.z (positive distance); rebuild view then world
+        vec2 ndc = uv * 2.0 - 1.0;
+        vec3 viewPos;
+        if (uCamMode > 0.5) {
+          viewPos = vec3(ndc.x / max(uProjX, 1e-5), ndc.y / max(uProjY, 1e-5), -viewZ);
+        } else {
+          viewPos = vec3(
+            ndc.x * viewZ / max(uProjX, 1e-5),
+            ndc.y * viewZ / max(uProjY, 1e-5),
+            -viewZ
+          );
+        }
+        return (uInvViewMatrix * vec4(viewPos, 1.0)).xyz;
+      }
+
+      float waterlineSuppress(vec2 uv, float viewZ, float mask) {
+        if (mask < 0.5 || viewZ < 0.02) return 1.0;
+        vec3 wp = reconstructWorld(uv, viewZ);
+        float waterY = oceanSurfaceY(wp.xz, uTime);
+        float above = wp.y - waterY;
+        // Soften only near the clip boundary so legitimate contours above remain
+        return smoothstep(0.0, uWaterlineBand, above);
       }
 
       void main() {
@@ -878,10 +1348,14 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
         // Exterior / overlap silhouettes: strong depth breaks (incl. vs empty)
         float sil = smoothstep(uThreshold * 0.35, uThreshold * 1.8, depthEdge);
+        // Suppress glowing artificial waterline from wave-clip depth discontinuity
+        float wlKeep = waterlineSuppress(vUv, c.a, m);
+        sil *= mix(wlKeep, 1.0, 0.15);
         // Internal form: normal changes on continuous surfaces
         float cont = objectMask(c);
         float internal = smoothstep(uThreshold * 0.25, uThreshold * 1.2, normalEdge) * cont;
         internal *= 1.0 - sil * 0.65;
+        internal *= mix(wlKeep, 1.0, 0.55);
 
         // Distance: keep silhouette, thin internals when small on screen
         float sizeNorm = clamp(uScreenRadius / 140.0, 0.0, 1.0);
@@ -933,14 +1407,21 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         vec3 cgyN = -cn[0]-2.0*cn[1]-cn[2]+cn[6]+2.0*cn[7]+cn[8];
         float cNorm = length(cgxN) + length(cgyN);
         float cSil = smoothstep(uThreshold * 0.35, uThreshold * 1.8, cDepth);
+        float cWl = waterlineSuppress(centreUv, cc.a, objectMask(cc));
+        cSil *= mix(cWl, 1.0, 0.15);
         float cInt = smoothstep(uThreshold * 0.25, uThreshold * 1.2, cNorm) * objectMask(cc);
         cInt *= 1.0 - cSil * 0.65;
+        cInt *= mix(cWl, 1.0, 0.55);
         float cEdge = clamp(cSil * silW + cInt * intW, 0.0, 1.0);
 
-        float alpha = cEdge * dotMask;
-        // Controlled brightness — not overexposed white
-        vec3 col = uContourColor * mix(0.55, 0.92, cSil * 0.65 + cInt * 0.35);
-        gl_FragColor = vec4(col, alpha * 0.92);
+        // Pigment-like NormalBlending (non-premultiplied):
+        //   RGB   = selectedBodiesColour × restrained form shading
+        //   Alpha = edgeMask × stippleDot × masterBodiesOpacity
+        // Do NOT multiply RGB by layer strength (that lives in alpha / silW / intW).
+        float formShade = mix(0.9, 1.0, clamp(cSil * 0.7 + cInt * 0.3, 0.0, 1.0));
+        vec3 pigment = uContourColor * formShade;
+        float coverage = clamp(cEdge * dotMask * uBodiesOpacity, 0.0, 1.0);
+        gl_FragColor = vec4(pigment, coverage);
       }
     `,
   });
@@ -953,12 +1434,73 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   contourScene.add(contourQuad);
   const contourCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
-  const depthOnlyMaterial = new THREE.MeshBasicMaterial({
+  const depthOnlyMaterial = new THREE.ShaderMaterial({
+    uniforms: makeWaveClipUniforms(),
     colorWrite: false,
     depthWrite: true,
     depthTest: true,
     side: THREE.FrontSide,
+    fog: false,
+    vertexShader: /* glsl */ `
+      varying vec3 vWorldPos;
+      void main() {
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vWorldPos = world.xyz;
+        gl_Position = projectionMatrix * viewMatrix * world;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      ${WAVE_CLIP_UNIFORMS_GLSL}
+      ${WAVE_SURFACE_GLSL}
+      varying vec3 vWorldPos;
+      void main() {
+        float waterY = oceanSurfaceY(vWorldPos.xz, uTime);
+        if (vWorldPos.y < waterY + uWaveClipBias) discard;
+        gl_FragColor = vec4(0.0);
+      }
+    `,
   });
+
+  function createSolidWaveClipMaterial(original) {
+    const src = Array.isArray(original) ? original : [original];
+    const mapped = src.map((mat) => {
+      if (!mat) return mat;
+      const clone = mat.clone();
+      clone.onBeforeCompile = (shader) => {
+        shader.uniforms.uTime = uniforms.uTime;
+        shader.uniforms.uSplashCenters = uniforms.uSplashCenters;
+        shader.uniforms.uSplashData = uniforms.uSplashData;
+        shader.uniforms.uWaveClipBias = { value: WAVE_CLIP_BIAS };
+        shader.vertexShader =
+          "varying vec3 vWaveWorldPos;\n" + shader.vertexShader;
+        shader.vertexShader = shader.vertexShader.replace(
+          "#include <worldpos_vertex>",
+          `#include <worldpos_vertex>
+           vWaveWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`
+        );
+        if (!shader.vertexShader.includes("vWaveWorldPos =")) {
+          shader.vertexShader = shader.vertexShader.replace(
+            "#include <project_vertex>",
+            `#include <project_vertex>
+             vWaveWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`
+          );
+        }
+        shader.fragmentShader =
+          WAVE_CLIP_UNIFORMS_GLSL +
+          "\nvarying vec3 vWaveWorldPos;\n" +
+          WAVE_SURFACE_GLSL +
+          shader.fragmentShader;
+        shader.fragmentShader = shader.fragmentShader.replace(
+          "#include <clipping_planes_fragment>",
+          `#include <clipping_planes_fragment>
+           if (vWaveWorldPos.y < oceanSurfaceY(vWaveWorldPos.xz, uTime) + uWaveClipBias) discard;`
+        );
+      };
+      clone.customProgramCacheKey = () => "body-wave-clip-v1";
+      return clone;
+    });
+    return Array.isArray(original) ? mapped : mapped[0];
+  }
 
   function resizeContourTargets() {
     const w = Math.max(1, Math.floor(window.innerWidth * renderer.getPixelRatio()));
@@ -977,7 +1519,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   function createSurfaceStippleMaterial(settings) {
     return new THREE.ShaderMaterial({
-      uniforms: {
+      uniforms: Object.assign(makeWaveClipUniforms(), {
         uCssPx: { value: settings.surfaceCssPx },
         uPixelRatio: { value: renderer.getPixelRatio() },
         uColor: { value: new THREE.Color(settings.surfaceColor) },
@@ -985,7 +1527,8 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         uDensity: { value: settings.surfaceDensity },
         uLightDir: { value: new THREE.Vector3(0.4, 0.85, 0.35).normalize() },
         uScreenRadius: { value: 80 },
-      },
+        uBodiesOpacity: { value: 1 },
+      }),
       transparent: true,
       depthTest: true,
       depthWrite: false,
@@ -1001,47 +1544,56 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         uniform float uDensity;
         uniform vec3 uLightDir;
         uniform float uScreenRadius;
+        uniform float uBodiesOpacity;
 
         varying float vAlpha;
         varying float vShade;
+        varying vec3 vWorldPos;
 
         void main() {
           vec3 nView = normalize(normalMatrix * aNormal);
-          // Suppress strongly back-facing
-          float facing = nView.z; // in view space, camera looks down -Z; front has +z normal toward camera... 
-          // view-space: camera looks -Z, front faces have normal.z > 0 when normalMatrix applied correctly
+          float facing = nView.z;
           float front = smoothstep(-0.05, 0.35, facing);
 
-          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          vec4 world = modelMatrix * vec4(position, 1.0);
+          vWorldPos = world.xyz;
+          vec4 mv = viewMatrix * world;
           gl_Position = projectionMatrix * mv;
 
           float css = clamp(uCssPx, 0.4, 0.9);
           gl_PointSize = css * uPixelRatio;
 
           float ndl = clamp(dot(nView, normalize(uLightDir)) * 0.5 + 0.5, 0.0, 1.0);
-          vShade = mix(0.35, 0.75, ndl);
+          // Restrained form shading — keep Bodies hue saturated
+          vShade = mix(0.9, 1.0, ndl);
 
-          // Distance: drop surface before it becomes an orb
           float sizeNorm = clamp(uScreenRadius / 140.0, 0.0, 1.0);
           float distSurf = mix(0.0, 1.0, smoothstep(0.15, 0.55, sizeNorm));
           float keep = step(aRank, uDensity * distSurf);
-          vAlpha = uStrength * front * keep * 0.85;
+          // Strength + master opacity only through alpha (not RGB)
+          vAlpha = uStrength * uBodiesOpacity * front * keep * 0.85;
           if (vAlpha < 0.01) {
             gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
           }
         }
       `,
       fragmentShader: /* glsl */ `
+        ${WAVE_CLIP_UNIFORMS_GLSL}
+        ${WAVE_SURFACE_GLSL}
         uniform vec3 uColor;
         varying float vAlpha;
         varying float vShade;
+        varying vec3 vWorldPos;
         void main() {
           if (vAlpha < 0.01) discard;
+          float waterY = oceanSurfaceY(vWorldPos.xz, uTime);
+          if (vWorldPos.y < waterY + uWaveClipBias) discard;
           vec2 uv = gl_PointCoord - 0.5;
           float d = length(uv);
           if (d > 0.5) discard;
           float edge = 1.0 - smoothstep(0.38, 0.5, d);
-          gl_FragColor = vec4(uColor * vShade, vAlpha * edge);
+          vec3 pigment = uColor * vShade;
+          gl_FragColor = vec4(pigment, vAlpha * edge);
         }
       `,
     });
@@ -1198,7 +1750,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         entry.mesh.material = depthOnlyMaterial;
         entry.mesh.visible = true;
       } else {
-        entry.mesh.material = entry.originalMaterial;
+        entry.mesh.material = entry.waveClipMaterial || entry.originalMaterial;
         entry.mesh.visible = true;
       }
     });
@@ -1214,21 +1766,68 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   function syncContourUniforms(state) {
     const s = getSharedContourSettings();
-    contourCompositeUniforms.uSilhouette.value = s.silhouette;
-    contourCompositeUniforms.uInternal.value = s.internal;
+    const vis = getVisibilitySettings();
+    const bodiesHex = getAppearanceColours().bodies;
+    const dotScale = vis.bodyDotScale;
+
+    contourCompositeUniforms.uSilhouette.value = vis.silhouette;
+    contourCompositeUniforms.uInternal.value = vis.internal;
     contourCompositeUniforms.uThreshold.value = s.edgeThreshold;
     contourCompositeUniforms.uStippleSpacing.value = s.stippleSpacing;
-    contourCompositeUniforms.uContourCssPx.value = s.contourCssPx;
-    contourCompositeUniforms.uContourColor.value.set(s.contourColor);
+    contourCompositeUniforms.uContourCssPx.value = THREE.MathUtils.clamp(
+      s.contourCssPx * dotScale,
+      0.5,
+      1.3
+    );
+    contourCompositeUniforms.uContourColor.value.set(bodiesHex);
+    contourCompositeUniforms.uBodiesOpacity.value = vis.bodiesOpacity;
     const debugMap = { final: 0, depth: 1, normals: 2, edges: 3 };
     contourCompositeUniforms.uDebug.value = debugMap[s.debug] ?? 0;
 
+    uniforms.uWaveOpacity.value = vis.wavesOpacity;
+    uniforms.uWaveDotScale.value = vis.waveDotScale;
+
     if (state?.surfaceMaterial) {
-      state.surfaceMaterial.uniforms.uCssPx.value = s.surfaceCssPx;
-      state.surfaceMaterial.uniforms.uStrength.value = s.surfaceStrength;
+      state.surfaceMaterial.uniforms.uCssPx.value = THREE.MathUtils.clamp(
+        s.surfaceCssPx * dotScale,
+        0.4,
+        0.9
+      );
+      state.surfaceMaterial.uniforms.uStrength.value = vis.surfaceStrength;
       state.surfaceMaterial.uniforms.uDensity.value = s.surfaceDensity;
-      state.surfaceMaterial.uniforms.uColor.value.set(s.surfaceColor);
+      state.surfaceMaterial.uniforms.uColor.value.set(bodiesHex);
+      state.surfaceMaterial.uniforms.uBodiesOpacity.value = vis.bodiesOpacity;
     }
+  }
+
+  function applyVisibilitySettings(settings) {
+    appearanceVisibility = {
+      bodiesOpacity: THREE.MathUtils.clamp(Number(settings.bodiesOpacity) ?? 1, 0, 1),
+      silhouette: THREE.MathUtils.clamp(Number(settings.silhouette) ?? 0.9, 0, 1.5),
+      internal: THREE.MathUtils.clamp(Number(settings.internal) ?? 0.55, 0, 1.5),
+      surfaceStrength: THREE.MathUtils.clamp(
+        Number(settings.surfaceStrength) ?? 0.25,
+        0,
+        0.8
+      ),
+      bodyDotScale: THREE.MathUtils.clamp(Number(settings.bodyDotScale) ?? 1, 0.65, 1.35),
+      wavesOpacity: THREE.MathUtils.clamp(Number(settings.wavesOpacity) ?? 1, 0, 1),
+      waveDotScale: THREE.MathUtils.clamp(Number(settings.waveDotScale) ?? 1, 0.65, 1.5),
+      contrastGuide: settings.contrastGuide === true,
+    };
+
+    // Keep contour settings mirror in sync (single authoritative visibility values)
+    const contour = getSharedContourSettings();
+    sharedContourSettings = {
+      ...contour,
+      silhouette: appearanceVisibility.silhouette,
+      internal: appearanceVisibility.internal,
+      surfaceStrength: appearanceVisibility.surfaceStrength,
+    };
+    saveContourSettings(sharedContourSettings);
+
+    syncContourUniformsAll();
+    updateContrastGuideUI();
   }
 
   function syncContourUniformsAll() {
@@ -1260,6 +1859,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       state.solidMeshes.push({
         mesh: obj,
         originalMaterial: obj.material,
+        waveClipMaterial: createSolidWaveClipMaterial(obj.material),
       });
     });
 
@@ -1293,6 +1893,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
     applyContourDisplayMode(state);
     syncContourUniforms(state);
+    applyBodiesColour(getAppearanceColours().bodies);
     console.log(
       `[${state.id} contour] surface dots=${sampled.count}, solid meshes=${state.solidMeshes.length}`
     );
@@ -1327,7 +1928,12 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     scene.overrideMaterial = prevOverride;
     activeCamera.layers.mask = prevMask;
     renderer.setRenderTarget(null);
-    renderer.setClearColor(0x000000, 1);
+    // Restored by applyBackgroundColour each frame / after pass
+    if (typeof applyBackgroundColour === "function") {
+      applyBackgroundColour(getAppearanceColours().background);
+    } else {
+      renderer.setClearColor(0x000000, 1);
+    }
     return true;
   }
 
@@ -1787,6 +2393,8 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     }
 
     setupContourStippleControls();
+    setupColourControls();
+    setupVisibilityControls();
   }
 
   function setupContourStippleControls() {
@@ -1813,12 +2421,9 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
     const settings = getSharedContourSettings();
     const map = [
-      ["tune-proj-contour-sil", "tune-proj-contour-sil-val", "silhouette", 0, 1, 2],
-      ["tune-proj-contour-int", "tune-proj-contour-int-val", "internal", 0, 1, 2],
       ["tune-proj-contour-thresh", "tune-proj-contour-thresh-val", "edgeThreshold", 0.05, 1.5, 2],
       ["tune-proj-contour-space", "tune-proj-contour-space-val", "stippleSpacing", 1.2, 5, 1],
       ["tune-proj-contour-csize", "tune-proj-contour-csize-val", "contourCssPx", 0.5, 1.3, 1],
-      ["tune-proj-contour-sstr", "tune-proj-contour-sstr-val", "surfaceStrength", 0, 0.6, 2],
       ["tune-proj-contour-ssize", "tune-proj-contour-ssize-val", "surfaceCssPx", 0.4, 0.9, 2],
       ["tune-proj-contour-sdens", "tune-proj-contour-sdens-val", "surfaceDensity", 0.15, 1, 2],
     ];
@@ -1838,24 +2443,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       });
     });
 
-    const cColor = document.getElementById("tune-proj-contour-ccolor");
-    const sColor = document.getElementById("tune-proj-contour-scolor");
-    if (cColor) {
-      cColor.value = settings.contourColor;
-      cColor.addEventListener("input", () => {
-        const next = { ...getSharedContourSettings(), contourColor: cColor.value };
-        saveContourSettings(next);
-        applyAppearance(next);
-      });
-    }
-    if (sColor) {
-      sColor.value = settings.surfaceColor;
-      sColor.addEventListener("input", () => {
-        const next = { ...getSharedContourSettings(), surfaceColor: sColor.value };
-        saveContourSettings(next);
-        applyAppearance(next);
-      });
-    }
+    // Contour/surface colour pickers removed — global COLOURS.Bodies owns hue
 
     syncMode(settings.mode);
     syncDebug(settings.debug);
@@ -2320,6 +2908,16 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   const currentLook = cameraState.lookAt.clone();
 
+  function syncContourWaveMatrices(cam) {
+    cam.updateMatrixWorld(true);
+    cam.updateProjectionMatrix();
+    contourCompositeUniforms.uInvProjectionMatrix.value.copy(cam.projectionMatrix).invert();
+    contourCompositeUniforms.uInvViewMatrix.value.copy(cam.matrixWorld);
+    contourCompositeUniforms.uProjX.value = cam.projectionMatrix.elements[0];
+    contourCompositeUniforms.uProjY.value = cam.projectionMatrix.elements[5];
+    contourCompositeUniforms.uCamMode.value = cam.isOrthographicCamera ? 1 : 0;
+  }
+
   function animate() {
     requestAnimationFrame(animate);
     const time = clock.getElapsedTime();
@@ -2339,6 +2937,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       updateCompositionLabels();
     }
 
+    syncContourWaveMatrices(activeCamera);
     const contourOn = renderContourPass();
 
     renderer.autoClear = true;

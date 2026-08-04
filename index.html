@@ -26,6 +26,49 @@
   <button type="button" id="float-tune-toggle" class="float-tune-toggle" aria-pressed="false">Hide Tune</button>
 
   <div class="float-tune-chrome">
+    <section class="appearance-colours" id="appearance-colours" aria-label="Global colours">
+      <h2 class="appearance-colours__title">COLOURS</h2>
+      <label class="appearance-colours__row">
+        <span>Background</span>
+        <input id="colour-background" type="color" value="#000000" />
+        <input id="colour-background-hex" class="appearance-colours__hex" type="text" spellcheck="false" maxlength="7" value="#000000" />
+      </label>
+      <label class="appearance-colours__row">
+        <span>Bodies</span>
+        <input id="colour-bodies" type="color" value="#f4efe6" />
+        <input id="colour-bodies-hex" class="appearance-colours__hex" type="text" spellcheck="false" maxlength="7" value="#f4efe6" />
+      </label>
+      <label class="appearance-colours__row">
+        <span>Waves</span>
+        <input id="colour-waves" type="color" value="#fff7e6" />
+        <input id="colour-waves-hex" class="appearance-colours__hex" type="text" spellcheck="false" maxlength="7" value="#fff7e6" />
+      </label>
+      <button type="button" class="appearance-colours__reset" id="colour-reset">Reset Colours</button>
+      <button type="button" class="appearance-colours__reset" id="colour-reference-light">Reference Light</button>
+    </section>
+
+    <section class="appearance-visibility" id="appearance-visibility" aria-label="Global visibility">
+      <h2 class="appearance-visibility__title">VISIBILITY</h2>
+      <label class="float-tune-row"><span>Bodies opacity</span><output id="vis-bodies-opacity-val">1.00</output><input id="vis-bodies-opacity" type="range" min="0" max="1" step="0.01" value="1" /></label>
+      <label class="float-tune-row"><span>Silhouette</span><output id="vis-silhouette-val">0.90</output><input id="vis-silhouette" type="range" min="0" max="1.5" step="0.01" value="0.90" /></label>
+      <label class="float-tune-row"><span>Internal edges</span><output id="vis-internal-val">0.55</output><input id="vis-internal" type="range" min="0" max="1.5" step="0.01" value="0.55" /></label>
+      <label class="float-tune-row"><span>Surface grain</span><output id="vis-surface-val">0.25</output><input id="vis-surface" type="range" min="0" max="0.8" step="0.01" value="0.25" /></label>
+      <label class="float-tune-row"><span>Body dot scale</span><output id="vis-body-dot-scale-val">1.00</output><input id="vis-body-dot-scale" type="range" min="0.65" max="1.35" step="0.01" value="1" /></label>
+      <label class="float-tune-row"><span>Waves opacity</span><output id="vis-waves-opacity-val">1.00</output><input id="vis-waves-opacity" type="range" min="0" max="1" step="0.01" value="1" /></label>
+      <label class="float-tune-row"><span>Wave dot scale</span><output id="vis-wave-dot-scale-val">1.00</output><input id="vis-wave-dot-scale" type="range" min="0.65" max="1.5" step="0.01" value="1" /></label>
+      <div class="float-tune-mode">
+        <span>Contrast guide</span>
+        <button type="button" class="view-btn is-active" data-contrast-guide="off">Off</button>
+        <button type="button" class="view-btn" data-contrast-guide="on">On</button>
+      </div>
+      <div id="contrast-guide-panel" class="contrast-guide-panel" hidden>
+        <div class="contrast-guide-row"><span>Bodies vs Background</span><output id="contrast-bodies-bg">—</output></div>
+        <div class="contrast-guide-row"><span>Waves vs Background</span><output id="contrast-waves-bg">—</output></div>
+        <div class="contrast-guide-row"><span>Bodies vs Waves</span><output id="contrast-bodies-waves">—</output></div>
+      </div>
+      <button type="button" class="appearance-colours__reset" id="visibility-reset">Reset Visibility</button>
+    </section>
+
     <div class="view-bar" id="view-bar" aria-label="Camera view">
       <div class="view-bar__group">
         <span class="view-bar__label">View</span>
@@ -66,16 +109,11 @@
             <button type="button" class="view-btn" data-contour-mode="solid">Solid</button>
             <button type="button" class="view-btn is-active" data-contour-mode="contour">Contour Stipple</button>
           </div>
-          <label class="float-tune-row"><span>Silhouette</span><output id="tune-proj-contour-sil-val">0.90</output><input id="tune-proj-contour-sil" type="range" min="0" max="1" step="0.01" value="0.90" /></label>
-          <label class="float-tune-row"><span>Internal edges</span><output id="tune-proj-contour-int-val">0.55</output><input id="tune-proj-contour-int" type="range" min="0" max="1" step="0.01" value="0.55" /></label>
           <label class="float-tune-row"><span>Edge threshold</span><output id="tune-proj-contour-thresh-val">0.45</output><input id="tune-proj-contour-thresh" type="range" min="0.05" max="1.5" step="0.01" value="0.45" /></label>
           <label class="float-tune-row"><span>Contour spacing</span><output id="tune-proj-contour-space-val">2.2</output><input id="tune-proj-contour-space" type="range" min="1.2" max="5" step="0.1" value="2.2" /></label>
           <label class="float-tune-row"><span>Contour dot CSS px</span><output id="tune-proj-contour-csize-val">0.9</output><input id="tune-proj-contour-csize" type="range" min="0.5" max="1.3" step="0.1" value="0.9" /></label>
-          <label class="float-tune-row"><span>Surface strength</span><output id="tune-proj-contour-sstr-val">0.25</output><input id="tune-proj-contour-sstr" type="range" min="0" max="0.6" step="0.01" value="0.25" /></label>
           <label class="float-tune-row"><span>Surface dot CSS px</span><output id="tune-proj-contour-ssize-val">0.65</output><input id="tune-proj-contour-ssize" type="range" min="0.4" max="0.9" step="0.05" value="0.65" /></label>
           <label class="float-tune-row"><span>Surface density</span><output id="tune-proj-contour-sdens-val">0.55</output><input id="tune-proj-contour-sdens" type="range" min="0.15" max="1" step="0.01" value="0.55" /></label>
-          <label class="float-tune-row float-tune-row--color"><span>Contour colour</span><input id="tune-proj-contour-ccolor" type="color" value="#f4efe6" /></label>
-          <label class="float-tune-row float-tune-row--color"><span>Surface colour</span><input id="tune-proj-contour-scolor" type="color" value="#d8d2c8" /></label>
           <div class="float-tune-mode float-tune-mode--wrap">
             <span>Debug</span>
             <button type="button" class="view-btn is-active" data-contour-debug="final">Final</button>
