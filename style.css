@@ -244,6 +244,45 @@ body:not(:has(.float-tune-chrome.is-hidden)) .float-tune-toggle {
   color: rgba(230, 140, 120, 0.95);
 }
 
+.appearance-mark-making {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  margin-bottom: 0.55rem;
+  padding: 0.45rem 0.5rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  user-select: none;
+}
+
+.appearance-mark-making__title {
+  margin: 0 0 0.1rem;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 236, 210, 0.78);
+}
+
+.appearance-mark-making .float-tune-row {
+  margin: 0;
+}
+
+.mark-warn {
+  margin: -0.05rem 0 0.1rem;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.52rem;
+  line-height: 1.3;
+  color: rgba(230, 180, 120, 0.9);
+}
+
+.mark-warn[hidden] {
+  display: none;
+}
+
 .view-bar {
   display: flex;
   flex-direction: column;

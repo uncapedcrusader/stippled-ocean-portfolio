@@ -5,8 +5,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   "use strict";
 
   const MAX_SPLASHES = 48;
-  // Linear size ×3 → area ×9, so particle count ×9 keeps the same density
-  const PARTICLE_COUNT = 1980000;
+  // Base field was 1.98M; master is 4× so density 1..8 can reveal more without reshuffling
+  const OCEAN_BASE_COUNT = 1980000;
+  const OCEAN_MASTER_MULT = 4;
+  const PARTICLE_COUNT = OCEAN_BASE_COUNT * OCEAN_MASTER_MULT;
   const OCEAN_RADIUS = 126;
   // Keep the near rim close to the camera; the disk extends 3× farther out
   const OCEAN_CENTER_Z = -100;
@@ -492,20 +494,33 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   const WAVE_CLIP_BIAS = 0.035;
 
+  // Early deterministic RNG (ocean master field is built before contour helpers)
+  function makeSeededUnitRandom(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
   // ─── Particle geometry (circular disk) ──────────────────────────────
   const positions = new Float32Array(PARTICLE_COUNT * 3);
   const seeds = new Float32Array(PARTICLE_COUNT);
+  const oceanRnd = makeSeededUnitRandom(0x0cea11);
 
   for (let i = 0; i < PARTICLE_COUNT; i++) {
     // Uniform disk sampling (sqrt keeps density even across the circle)
-    const r = Math.sqrt(Math.random()) * OCEAN_RADIUS;
-    const theta = Math.random() * Math.PI * 2;
+    const r = Math.sqrt(oceanRnd()) * OCEAN_RADIUS;
+    const theta = oceanRnd() * Math.PI * 2;
     const x = Math.cos(theta) * r;
     const z = OCEAN_CENTER_Z + Math.sin(theta) * r;
     positions[i * 3] = x;
     positions[i * 3 + 1] = 0;
     positions[i * 3 + 2] = z;
-    seeds[i] = Math.random();
+    seeds[i] = oceanRnd();
   }
 
   const geometry = new THREE.BufferGeometry();
@@ -526,6 +541,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     uWaveColor: { value: new THREE.Color(1.0, 0.97, 0.9) },
     uWaveOpacity: { value: 1 },
     uWaveDotScale: { value: 1 },
+    uWaveParticleDensity: { value: 1 },
+    uWaveRidgeEmphasis: { value: 0 },
+    uWaveRidgeWidth: { value: 1 },
+    uOceanMasterMult: { value: OCEAN_MASTER_MULT },
   };
 
   const material = new THREE.ShaderMaterial({
@@ -546,6 +565,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       uniform vec3 uSplashCenters[${MAX_SPLASHES}];
       uniform float uSplashData[${MAX_SPLASHES * 4}];
       uniform float uWaveDotScale;
+      uniform float uWaveParticleDensity;
+      uniform float uWaveRidgeEmphasis;
+      uniform float uWaveRidgeWidth;
+      uniform float uOceanMasterMult;
 
       varying float vAlpha;
       varying float vBright;
@@ -598,8 +621,21 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         float densityGate = mix(0.12, 1.0, pow(heightNorm, 1.65));
         densityGate *= mix(0.55, 1.0, depthFade) * edgeFade;
 
-        // Stochastic discard via alpha — sparse troughs
-        float keep = step(aSeed * 0.92, densityGate);
+        // Ridge / fold emphasis from wave-height derivatives (does not alter displacement)
+        float eps = 0.55;
+        float hx = waveHeight(pos.xz + vec2(eps, 0.0), t) - waveHeight(pos.xz - vec2(eps, 0.0), t);
+        float hz = waveHeight(pos.xz + vec2(0.0, eps), t) - waveHeight(pos.xz - vec2(0.0, eps), t);
+        float slope = length(vec2(hx, hz)) / max(2.0 * eps, 1e-4);
+        float widthK = max(uWaveRidgeWidth, 0.25);
+        float ridge = smoothstep(0.12 * widthK, 0.95 * widthK, slope);
+        ridge = max(ridge, smoothstep(0.55, 1.85, max(h, 0.0)) * 0.55);
+        ridge *= clamp(uWaveRidgeEmphasis, 0.0, 4.0) * 0.28;
+        densityGate = clamp(densityGate + ridge, 0.0, 1.35);
+
+        // Ranked master field: density 1 ≈ legacy keep rate on base count
+        float dens = max(uWaveParticleDensity, 0.01);
+        float keepThresh = clamp((densityGate / 0.92) * (dens / max(uOceanMasterMult, 1.0)), 0.0, 1.0);
+        float keep = step(aSeed, keepThresh);
 
         vBright = mix(0.55, 1.0, pow(heightNorm, 1.15));
         // Base opacity kept in the 0.4–0.6 range so stacked splashes don't blow out
@@ -608,8 +644,11 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         float size = mix(1.0, 2.35, pow(heightNorm, 1.4));
         size *= mix(0.7, 1.1, depthFade) * mix(0.55, 1.0, edgeFade);
         size += splash * 0.18;
-        gl_PointSize = size * uPixelRatio * (45.0 / -mvPosition.z) * uWaveDotScale;
-        gl_PointSize = clamp(gl_PointSize, 0.6 * uPixelRatio, 4.5 * uPixelRatio);
+        size *= mix(1.0, 1.15, clamp(ridge * 2.0, 0.0, 1.0));
+        float pr = uPixelRatio;
+        gl_PointSize = size * pr * (45.0 / -mvPosition.z) * uWaveDotScale;
+        // Upper bound scales with dot scale so density≠size and high scale is not silently clamped away
+        gl_PointSize = clamp(gl_PointSize, 0.35 * pr, max(4.5, 4.5 * uWaveDotScale) * pr);
       }
     `,
     fragmentShader: /* glsl */ `
@@ -675,7 +714,11 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   const CONTOUR_LAYER = 1;
   const CONTOUR_STORAGE_KEY = "stippled-ocean-proj-contour-stipple-v1";
-  const CONTOUR_SURFACE_COUNT = 5500;
+  // Legacy base sample count; master is 8× ranked so surface density 1..8 reveals stably
+  const CONTOUR_SURFACE_BASE = 5500;
+  const CONTOUR_SURFACE_MASTER_MULT = 8;
+  const CONTOUR_SURFACE_COUNT = CONTOUR_SURFACE_BASE * CONTOUR_SURFACE_MASTER_MULT;
+  const CONTOUR_SURFACE_BASE_FRAC = 0.55; // prior Contour Stipple "surface density" default
   // Per-model surface seeds (Projects keeps the accepted grain sample set)
   const CONTOUR_SURFACE_SEEDS = {
     projects: 0xc07a01,
@@ -866,9 +909,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     silhouette: CONTOUR_DEFAULTS.silhouette,
     internal: CONTOUR_DEFAULTS.internal,
     surfaceStrength: CONTOUR_DEFAULTS.surfaceStrength,
-    bodyDotScale: 1,
     wavesOpacity: 1,
-    waveDotScale: 1,
     contrastGuide: false,
   });
 
@@ -901,9 +942,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
           0,
           0.8
         ),
-        bodyDotScale: THREE.MathUtils.clamp(Number(p.bodyDotScale) ?? 1, 0.65, 1.35),
         wavesOpacity: THREE.MathUtils.clamp(Number(p.wavesOpacity) ?? 1, 0, 1),
-        waveDotScale: THREE.MathUtils.clamp(Number(p.waveDotScale) ?? 1, 0.65, 1.5),
         contrastGuide: p.contrastGuide === true,
       };
     } catch (_) {
@@ -919,6 +958,119 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   function getVisibilitySettings() {
     return appearanceVisibility;
+  }
+
+  // ─── Mark-making (density / spacing / irregularity — appearance only) ─
+  const MARK_STORAGE_KEY = "stippled-ocean-appearance-mark-making-v1";
+  const MARK_ORIGINALS = Object.freeze({
+    surfaceDensity: 1,
+    contourDensity: 1,
+    contourWidth: 0.9,
+    organicIrregularity: 0,
+    bodyDotScale: 1,
+    waveParticleDensity: 1,
+    waveRidgeEmphasis: 0,
+    waveRidgeWidth: 1,
+    waveDotScale: 1,
+  });
+
+  const REFERENCE_TEXTURE = Object.freeze({
+    visibility: {
+      bodiesOpacity: 1,
+      silhouette: 1.25,
+      internal: 1,
+      surfaceStrength: 0.45,
+      wavesOpacity: 1,
+      contrastGuide: false,
+    },
+    mark: {
+      surfaceDensity: 1.75,
+      contourDensity: 2.25,
+      contourWidth: 1.5,
+      organicIrregularity: 0.35,
+      bodyDotScale: 1.75,
+      waveParticleDensity: 2.25,
+      waveRidgeEmphasis: 2.25,
+      waveRidgeWidth: 1.4,
+      waveDotScale: 1.8,
+    },
+  });
+
+  function loadMarkSettings() {
+    try {
+      const raw = localStorage.getItem(MARK_STORAGE_KEY);
+      // Migrate prior visibility-stored dot scales once
+      let migratedDots = null;
+      try {
+        const visRaw = localStorage.getItem(VISIBILITY_STORAGE_KEY);
+        if (visRaw) {
+          const vp = JSON.parse(visRaw);
+          if (vp && (vp.bodyDotScale != null || vp.waveDotScale != null)) {
+            migratedDots = {
+              bodyDotScale: Number(vp.bodyDotScale) || 1,
+              waveDotScale: Number(vp.waveDotScale) || 1,
+            };
+          }
+        }
+      } catch (_) {
+        /* ignore */
+      }
+      if (!raw) {
+        return {
+          ...MARK_ORIGINALS,
+          ...(migratedDots
+            ? {
+                bodyDotScale: THREE.MathUtils.clamp(
+                  migratedDots.bodyDotScale,
+                  0.25,
+                  8
+                ),
+                waveDotScale: THREE.MathUtils.clamp(
+                  migratedDots.waveDotScale,
+                  0.25,
+                  8
+                ),
+              }
+            : null),
+        };
+      }
+      const p = JSON.parse(raw);
+      return {
+        surfaceDensity: THREE.MathUtils.clamp(Number(p.surfaceDensity) ?? 1, 0.25, 8),
+        contourDensity: THREE.MathUtils.clamp(Number(p.contourDensity) ?? 1, 0.25, 8),
+        contourWidth: THREE.MathUtils.clamp(Number(p.contourWidth) ?? 0.9, 0.5, 4),
+        organicIrregularity: THREE.MathUtils.clamp(
+          Number(p.organicIrregularity) ?? 0,
+          0,
+          1
+        ),
+        bodyDotScale: THREE.MathUtils.clamp(Number(p.bodyDotScale) ?? 1, 0.25, 8),
+        waveParticleDensity: THREE.MathUtils.clamp(
+          Number(p.waveParticleDensity) ?? 1,
+          0.25,
+          8
+        ),
+        waveRidgeEmphasis: THREE.MathUtils.clamp(
+          Number(p.waveRidgeEmphasis) ?? 0,
+          0,
+          4
+        ),
+        waveRidgeWidth: THREE.MathUtils.clamp(Number(p.waveRidgeWidth) ?? 1, 0.25, 4),
+        waveDotScale: THREE.MathUtils.clamp(Number(p.waveDotScale) ?? 1, 0.25, 8),
+      };
+    } catch (_) {
+      return { ...MARK_ORIGINALS };
+    }
+  }
+
+  function saveMarkSettings(settings) {
+    localStorage.setItem(MARK_STORAGE_KEY, JSON.stringify(settings));
+  }
+
+  let appearanceMark = loadMarkSettings();
+
+  function getMarkSettings() {
+    return appearanceMark;
   }
 
   // Colour-space: THREE r160 enables ColorManagement by default. THREE.Color.set(hex)
@@ -1024,9 +1176,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       set("vis-silhouette", "vis-silhouette-val", vis.silhouette, 2);
       set("vis-internal", "vis-internal-val", vis.internal, 2);
       set("vis-surface", "vis-surface-val", vis.surfaceStrength, 2);
-      set("vis-body-dot-scale", "vis-body-dot-scale-val", vis.bodyDotScale, 2);
       set("vis-waves-opacity", "vis-waves-opacity-val", vis.wavesOpacity, 2);
-      set("vis-wave-dot-scale", "vis-wave-dot-scale-val", vis.waveDotScale, 2);
       document.querySelectorAll("[data-contrast-guide]").forEach((btn) => {
         const on = btn.dataset.contrastGuide === "on";
         btn.classList.toggle("is-active", on === vis.contrastGuide);
@@ -1052,9 +1202,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     bind("vis-silhouette", "vis-silhouette-val", "silhouette", 0, 1.5, 2);
     bind("vis-internal", "vis-internal-val", "internal", 0, 1.5, 2);
     bind("vis-surface", "vis-surface-val", "surfaceStrength", 0, 0.8, 2);
-    bind("vis-body-dot-scale", "vis-body-dot-scale-val", "bodyDotScale", 0.65, 1.35, 2);
     bind("vis-waves-opacity", "vis-waves-opacity-val", "wavesOpacity", 0, 1, 2);
-    bind("vis-wave-dot-scale", "vis-wave-dot-scale-val", "waveDotScale", 0.65, 1.5, 2);
 
     document.querySelectorAll("[data-contrast-guide]").forEach((btn) => {
       btn.addEventListener("click", (event) => {
@@ -1081,6 +1229,110 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     }
 
     syncFields(getVisibilitySettings());
+  }
+
+  function updateMarkPerfWarnings() {
+    const mark = getMarkSettings();
+    const setWarn = (id, show) => {
+      const el = document.getElementById(id);
+      if (el) el.hidden = !show;
+    };
+    setWarn("mark-warn-surface", mark.surfaceDensity >= 4);
+    setWarn("mark-warn-contour", mark.contourDensity >= 4);
+    setWarn("mark-warn-wave", mark.waveParticleDensity >= 3);
+  }
+
+  function setupMarkMakingControls() {
+    const root = document.getElementById("appearance-mark-making");
+    if (!root) return;
+
+    const syncFields = (mark) => {
+      const set = (id, outId, value, digits) => {
+        const el = document.getElementById(id);
+        const out = document.getElementById(outId);
+        if (el) el.value = String(value);
+        if (out) out.textContent = Number(value).toFixed(digits);
+      };
+      set("mark-surface-density", "mark-surface-density-val", mark.surfaceDensity, 2);
+      set("mark-contour-density", "mark-contour-density-val", mark.contourDensity, 2);
+      set("mark-contour-width", "mark-contour-width-val", mark.contourWidth, 2);
+      set("mark-organic", "mark-organic-val", mark.organicIrregularity, 2);
+      set("mark-body-dot-scale", "mark-body-dot-scale-val", mark.bodyDotScale, 2);
+      set("mark-wave-density", "mark-wave-density-val", mark.waveParticleDensity, 2);
+      set("mark-wave-ridge", "mark-wave-ridge-val", mark.waveRidgeEmphasis, 2);
+      set("mark-wave-ridge-width", "mark-wave-ridge-width-val", mark.waveRidgeWidth, 2);
+      set("mark-wave-dot-scale", "mark-wave-dot-scale-val", mark.waveDotScale, 2);
+      updateMarkPerfWarnings();
+    };
+
+    const bind = (id, outId, key, min, max, digits, step) => {
+      const el = document.getElementById(id);
+      const out = document.getElementById(outId);
+      if (!el) return;
+      const commit = () => {
+        const value = THREE.MathUtils.clamp(parseFloat(el.value) || min, min, max);
+        if (out) out.textContent = value.toFixed(digits);
+        const next = { ...getMarkSettings(), [key]: value };
+        saveMarkSettings(next);
+        applyMarkSettings(next);
+        syncFields(getMarkSettings());
+      };
+      el.addEventListener("input", commit);
+      if (step) el.step = String(step);
+    };
+
+    bind("mark-surface-density", "mark-surface-density-val", "surfaceDensity", 0.25, 8, 2);
+    bind("mark-contour-density", "mark-contour-density-val", "contourDensity", 0.25, 8, 2);
+    bind("mark-contour-width", "mark-contour-width-val", "contourWidth", 0.5, 4, 2);
+    bind("mark-organic", "mark-organic-val", "organicIrregularity", 0, 1, 2);
+    bind("mark-body-dot-scale", "mark-body-dot-scale-val", "bodyDotScale", 0.25, 8, 2, 0.05);
+    bind("mark-wave-density", "mark-wave-density-val", "waveParticleDensity", 0.25, 8, 2);
+    bind("mark-wave-ridge", "mark-wave-ridge-val", "waveRidgeEmphasis", 0, 4, 2);
+    bind("mark-wave-ridge-width", "mark-wave-ridge-width-val", "waveRidgeWidth", 0.25, 4, 2);
+    bind("mark-wave-dot-scale", "mark-wave-dot-scale-val", "waveDotScale", 0.25, 8, 2, 0.05);
+
+    const resetBtn = document.getElementById("mark-reset");
+    if (resetBtn) {
+      resetBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const next = { ...MARK_ORIGINALS };
+        saveMarkSettings(next);
+        applyMarkSettings(next);
+        syncFields(next);
+      });
+    }
+
+    const refBtn = document.getElementById("mark-reference-texture");
+    if (refBtn) {
+      refBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const visNext = {
+          ...getVisibilitySettings(),
+          ...REFERENCE_TEXTURE.visibility,
+        };
+        const markNext = { ...REFERENCE_TEXTURE.mark };
+        saveVisibilitySettings(visNext);
+        applyVisibilitySettings(visNext);
+        saveMarkSettings(markNext);
+        applyMarkSettings(markNext);
+        syncFields(markNext);
+        const syncVis = (id, outId, value, digits) => {
+          const el = document.getElementById(id);
+          const out = document.getElementById(outId);
+          if (el) el.value = String(value);
+          if (out) out.textContent = Number(value).toFixed(digits);
+        };
+        syncVis("vis-bodies-opacity", "vis-bodies-opacity-val", visNext.bodiesOpacity, 2);
+        syncVis("vis-silhouette", "vis-silhouette-val", visNext.silhouette, 2);
+        syncVis("vis-internal", "vis-internal-val", visNext.internal, 2);
+        syncVis("vis-surface", "vis-surface-val", visNext.surfaceStrength, 2);
+        syncVis("vis-waves-opacity", "vis-waves-opacity-val", visNext.wavesOpacity, 2);
+      });
+    }
+
+    syncFields(getMarkSettings());
   }
 
   function setupColourControls() {
@@ -1232,6 +1484,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     uScreenRadius: { value: 80 },
     uDebug: { value: 0 },
     uBodiesOpacity: { value: 1 },
+    uContourDensity: { value: 1 },
+    uContourWidth: { value: 0.9 },
+    uOrganicIrregularity: { value: 0 },
+    uBodyDotScale: { value: 1 },
     uTime: uniforms.uTime,
     uSplashCenters: uniforms.uSplashCenters,
     uSplashData: uniforms.uSplashData,
@@ -1247,6 +1503,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   // Apply appearance colours once composite uniforms exist (look matches pre-feature)
   applyAppearanceColours(appearanceColours);
   applyVisibilitySettings(appearanceVisibility);
+  applyMarkSettings(appearanceMark);
 
   const contourCompositeMaterial = new THREE.ShaderMaterial({
     uniforms: contourCompositeUniforms,
@@ -1275,6 +1532,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       uniform float uScreenRadius;
       uniform int uDebug;
       uniform float uBodiesOpacity;
+      uniform float uContourDensity;
+      uniform float uContourWidth;
+      uniform float uOrganicIrregularity;
+      uniform float uBodyDotScale;
       ${WAVE_CLIP_UNIFORMS_GLSL}
       uniform mat4 uInvProjectionMatrix;
       uniform mat4 uInvViewMatrix;
@@ -1377,14 +1638,25 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
           return;
         }
 
-        // Stable screen-space stipple: circular dots on a fixed pixel grid
-        float spacing = max(uStippleSpacing, 1.2) * uPixelRatio;
+        // Stable screen-space stipple with optional organic cell jitter
+        float dens = max(uContourDensity, 0.25);
+        float spacing = max(uStippleSpacing / dens, 0.35) * uPixelRatio;
         vec2 pixel = vUv * uResolution;
         vec2 cell = floor(pixel / spacing);
+        float irreg = clamp(uOrganicIrregularity, 0.0, 1.0);
+        // Deterministic hash of cell id — stable under camera motion
+        float n1 = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+        float n2 = fract(sin(dot(cell, vec2(269.5, 183.3))) * 43758.5453);
+        float n3 = fract(sin(dot(cell, vec2(419.2, 371.9))) * 43758.5453);
         vec2 centre = (cell + 0.5) * spacing;
+        centre += (vec2(n1, n2) - 0.5) * spacing * irreg * 0.7;
         float dist = length(pixel - centre);
-        float radius = clamp(uContourCssPx, 0.5, 1.3) * uPixelRatio * 0.5;
+        float baseCss = clamp(uContourCssPx * uBodyDotScale, 0.25, 10.0);
+        float radius = baseCss * uPixelRatio * 0.5;
         float dotMask = 1.0 - smoothstep(radius * 0.75, radius * 1.15, dist);
+        // Subtle survival variation — breaks perfect grid without flicker
+        float survive = mix(1.0, step(irreg * 0.22, n3), irreg);
+        dotMask *= survive;
 
         // Edge strength sampled at the stipple centre (stable, less crawl)
         vec2 centreUv = centre / uResolution;
@@ -1414,10 +1686,51 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         cInt *= mix(cWl, 1.0, 0.55);
         float cEdge = clamp(cSil * silW + cInt * intW, 0.0, 1.0);
 
+        // Contour width: dilate edge band in screen space (multi-row marks, not glow)
+        float widthPx = max(uContourWidth, 0.5) * uPixelRatio;
+        float dilate = 0.0;
+        float stepPx = max(spacing * 0.55, 1.0);
+        for (int r = 1; r <= 4; r++) {
+          float rad = float(r) * stepPx;
+          float fall = (1.0 - smoothstep(0.0, widthPx, rad)) * step(rad, widthPx * 1.05);
+          for (int kDir = 0; kDir < 8; kDir++) {
+            float ang = float(kDir) * 0.785398163;
+            vec2 ouv = centreUv + vec2(cos(ang), sin(ang)) * rad / uResolution;
+            vec4 os = fetch(ouv);
+            float oSil = 0.0;
+            float oInt = 0.0;
+            {
+              float od0 = fetch(ouv + vec2(-1.0, -1.0) * texel).a;
+              float od1 = fetch(ouv + vec2( 0.0, -1.0) * texel).a;
+              float od2 = fetch(ouv + vec2( 1.0, -1.0) * texel).a;
+              float od3 = fetch(ouv + vec2(-1.0,  0.0) * texel).a;
+              float od4 = os.a;
+              float od5 = fetch(ouv + vec2( 1.0,  0.0) * texel).a;
+              float od6 = fetch(ouv + vec2(-1.0,  1.0) * texel).a;
+              float od7 = fetch(ouv + vec2( 0.0,  1.0) * texel).a;
+              float od8 = fetch(ouv + vec2( 1.0,  1.0) * texel).a;
+              float ogx = -od0 - 2.0*od3 - od6 + od2 + 2.0*od5 + od8;
+              float ogy = -od0 - 2.0*od1 - od2 + od6 + 2.0*od7 + od8;
+              float oDepth = sqrt(ogx*ogx + ogy*ogy);
+              oSil = smoothstep(uThreshold * 0.35, uThreshold * 1.8, oDepth);
+              vec3 nC = os.rgb * 2.0 - 1.0;
+              vec3 nL = fetch(ouv + vec2(-1.0, 0.0) * texel).rgb * 2.0 - 1.0;
+              vec3 nR = fetch(ouv + vec2( 1.0, 0.0) * texel).rgb * 2.0 - 1.0;
+              vec3 nD = fetch(ouv + vec2( 0.0,-1.0) * texel).rgb * 2.0 - 1.0;
+              vec3 nU = fetch(ouv + vec2( 0.0, 1.0) * texel).rgb * 2.0 - 1.0;
+              float oNorm = length(nR - nL) + length(nU - nD);
+              oInt = smoothstep(uThreshold * 0.25, uThreshold * 1.2, oNorm) * objectMask(os);
+              oInt *= 1.0 - oSil * 0.65;
+            }
+            float oEdge = clamp(oSil * silW + oInt * intW, 0.0, 1.0);
+            dilate = max(dilate, oEdge * fall);
+          }
+        }
+        cEdge = max(cEdge, dilate * 0.92);
+
         // Pigment-like NormalBlending (non-premultiplied):
         //   RGB   = selectedBodiesColour × restrained form shading
         //   Alpha = edgeMask × stippleDot × masterBodiesOpacity
-        // Do NOT multiply RGB by layer strength (that lives in alpha / silW / intW).
         float formShade = mix(0.9, 1.0, clamp(cSil * 0.7 + cInt * 0.3, 0.0, 1.0));
         vec3 pigment = uContourColor * formShade;
         float coverage = clamp(cEdge * dotMask * uBodiesOpacity, 0.0, 1.0);
@@ -1525,9 +1838,15 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         uColor: { value: new THREE.Color(settings.surfaceColor) },
         uStrength: { value: settings.surfaceStrength },
         uDensity: { value: settings.surfaceDensity },
+        uMarkSurfaceDensity: { value: 1 },
         uLightDir: { value: new THREE.Vector3(0.4, 0.85, 0.35).normalize() },
         uScreenRadius: { value: 80 },
         uBodiesOpacity: { value: 1 },
+        uBodyDotScale: { value: 1 },
+        uOrganicIrregularity: { value: 0 },
+        uSurfaceMasterScale: {
+          value: (CONTOUR_SURFACE_BASE_FRAC * CONTOUR_SURFACE_BASE) / CONTOUR_SURFACE_COUNT,
+        },
       }),
       transparent: true,
       depthTest: true,
@@ -1542,9 +1861,13 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         uniform float uPixelRatio;
         uniform float uStrength;
         uniform float uDensity;
+        uniform float uMarkSurfaceDensity;
+        uniform float uSurfaceMasterScale;
         uniform vec3 uLightDir;
         uniform float uScreenRadius;
         uniform float uBodiesOpacity;
+        uniform float uBodyDotScale;
+        uniform float uOrganicIrregularity;
 
         varying float vAlpha;
         varying float vShade;
@@ -1560,7 +1883,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
           vec4 mv = viewMatrix * world;
           gl_Position = projectionMatrix * mv;
 
-          float css = clamp(uCssPx, 0.4, 0.9);
+          float css = clamp(uCssPx * uBodyDotScale, 0.25, 8.0);
           gl_PointSize = css * uPixelRatio;
 
           float ndl = clamp(dot(nView, normalize(uLightDir)) * 0.5 + 0.5, 0.0, 1.0);
@@ -1569,9 +1892,17 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
           float sizeNorm = clamp(uScreenRadius / 140.0, 0.0, 1.0);
           float distSurf = mix(0.0, 1.0, smoothstep(0.15, 0.55, sizeNorm));
-          float keep = step(aRank, uDensity * distSurf);
-          // Strength + master opacity only through alpha (not RGB)
-          vAlpha = uStrength * uBodiesOpacity * front * keep * 0.85;
+          // Ranked master: density 1 ≈ legacy 0.55 of 5500 points
+          float thresh = clamp(
+            uSurfaceMasterScale * uMarkSurfaceDensity * distSurf,
+            0.0,
+            1.0
+          );
+          float irreg = clamp(uOrganicIrregularity, 0.0, 1.0);
+          float jitterGate = mix(1.0, step(irreg * 0.18, fract(aRank * 17.13 + aRank)), irreg);
+          float keep = step(aRank, thresh) * jitterGate;
+          // Strength + master opacity only through alpha (no hidden 0.85 veil)
+          vAlpha = uStrength * uBodiesOpacity * front * keep;
           if (vAlpha < 0.01) {
             gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
           }
@@ -1767,36 +2098,41 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   function syncContourUniforms(state) {
     const s = getSharedContourSettings();
     const vis = getVisibilitySettings();
+    const mark = getMarkSettings();
     const bodiesHex = getAppearanceColours().bodies;
-    const dotScale = vis.bodyDotScale;
+    const dotScale = mark.bodyDotScale;
 
     contourCompositeUniforms.uSilhouette.value = vis.silhouette;
     contourCompositeUniforms.uInternal.value = vis.internal;
     contourCompositeUniforms.uThreshold.value = s.edgeThreshold;
     contourCompositeUniforms.uStippleSpacing.value = s.stippleSpacing;
-    contourCompositeUniforms.uContourCssPx.value = THREE.MathUtils.clamp(
-      s.contourCssPx * dotScale,
-      0.5,
-      1.3
-    );
+    contourCompositeUniforms.uContourCssPx.value = s.contourCssPx;
     contourCompositeUniforms.uContourColor.value.set(bodiesHex);
     contourCompositeUniforms.uBodiesOpacity.value = vis.bodiesOpacity;
+    contourCompositeUniforms.uContourDensity.value = mark.contourDensity;
+    contourCompositeUniforms.uContourWidth.value = mark.contourWidth;
+    contourCompositeUniforms.uOrganicIrregularity.value = mark.organicIrregularity;
+    contourCompositeUniforms.uBodyDotScale.value = dotScale;
     const debugMap = { final: 0, depth: 1, normals: 2, edges: 3 };
     contourCompositeUniforms.uDebug.value = debugMap[s.debug] ?? 0;
 
     uniforms.uWaveOpacity.value = vis.wavesOpacity;
-    uniforms.uWaveDotScale.value = vis.waveDotScale;
+    uniforms.uWaveDotScale.value = mark.waveDotScale;
+    uniforms.uWaveParticleDensity.value = mark.waveParticleDensity;
+    uniforms.uWaveRidgeEmphasis.value = mark.waveRidgeEmphasis;
+    uniforms.uWaveRidgeWidth.value = mark.waveRidgeWidth;
+    uniforms.uOceanMasterMult.value = OCEAN_MASTER_MULT;
 
     if (state?.surfaceMaterial) {
-      state.surfaceMaterial.uniforms.uCssPx.value = THREE.MathUtils.clamp(
-        s.surfaceCssPx * dotScale,
-        0.4,
-        0.9
-      );
+      state.surfaceMaterial.uniforms.uCssPx.value = s.surfaceCssPx;
       state.surfaceMaterial.uniforms.uStrength.value = vis.surfaceStrength;
       state.surfaceMaterial.uniforms.uDensity.value = s.surfaceDensity;
+      state.surfaceMaterial.uniforms.uMarkSurfaceDensity.value = mark.surfaceDensity;
       state.surfaceMaterial.uniforms.uColor.value.set(bodiesHex);
       state.surfaceMaterial.uniforms.uBodiesOpacity.value = vis.bodiesOpacity;
+      state.surfaceMaterial.uniforms.uBodyDotScale.value = dotScale;
+      state.surfaceMaterial.uniforms.uOrganicIrregularity.value =
+        mark.organicIrregularity;
     }
   }
 
@@ -1810,13 +2146,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         0,
         0.8
       ),
-      bodyDotScale: THREE.MathUtils.clamp(Number(settings.bodyDotScale) ?? 1, 0.65, 1.35),
       wavesOpacity: THREE.MathUtils.clamp(Number(settings.wavesOpacity) ?? 1, 0, 1),
-      waveDotScale: THREE.MathUtils.clamp(Number(settings.waveDotScale) ?? 1, 0.65, 1.5),
       contrastGuide: settings.contrastGuide === true,
     };
 
-    // Keep contour settings mirror in sync (single authoritative visibility values)
     const contour = getSharedContourSettings();
     sharedContourSettings = {
       ...contour,
@@ -1828,6 +2161,34 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
     syncContourUniformsAll();
     updateContrastGuideUI();
+  }
+
+  function applyMarkSettings(settings) {
+    appearanceMark = {
+      surfaceDensity: THREE.MathUtils.clamp(Number(settings.surfaceDensity) ?? 1, 0.25, 8),
+      contourDensity: THREE.MathUtils.clamp(Number(settings.contourDensity) ?? 1, 0.25, 8),
+      contourWidth: THREE.MathUtils.clamp(Number(settings.contourWidth) ?? 0.9, 0.5, 4),
+      organicIrregularity: THREE.MathUtils.clamp(
+        Number(settings.organicIrregularity) ?? 0,
+        0,
+        1
+      ),
+      bodyDotScale: THREE.MathUtils.clamp(Number(settings.bodyDotScale) ?? 1, 0.25, 8),
+      waveParticleDensity: THREE.MathUtils.clamp(
+        Number(settings.waveParticleDensity) ?? 1,
+        0.25,
+        8
+      ),
+      waveRidgeEmphasis: THREE.MathUtils.clamp(
+        Number(settings.waveRidgeEmphasis) ?? 0,
+        0,
+        4
+      ),
+      waveRidgeWidth: THREE.MathUtils.clamp(Number(settings.waveRidgeWidth) ?? 1, 0.25, 4),
+      waveDotScale: THREE.MathUtils.clamp(Number(settings.waveDotScale) ?? 1, 0.25, 8),
+    };
+    syncContourUniformsAll();
+    updateMarkPerfWarnings();
   }
 
   function syncContourUniformsAll() {
@@ -2395,6 +2756,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     setupContourStippleControls();
     setupColourControls();
     setupVisibilityControls();
+    setupMarkMakingControls();
   }
 
   function setupContourStippleControls() {
@@ -2422,10 +2784,8 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     const settings = getSharedContourSettings();
     const map = [
       ["tune-proj-contour-thresh", "tune-proj-contour-thresh-val", "edgeThreshold", 0.05, 1.5, 2],
-      ["tune-proj-contour-space", "tune-proj-contour-space-val", "stippleSpacing", 1.2, 5, 1],
       ["tune-proj-contour-csize", "tune-proj-contour-csize-val", "contourCssPx", 0.5, 1.3, 1],
       ["tune-proj-contour-ssize", "tune-proj-contour-ssize-val", "surfaceCssPx", 0.4, 0.9, 2],
-      ["tune-proj-contour-sdens", "tune-proj-contour-sdens-val", "surfaceDensity", 0.15, 1, 2],
     ];
 
     map.forEach(([id, outId, key, min, max, digits]) => {
