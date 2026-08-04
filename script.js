@@ -103,6 +103,11 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   const canvas = document.getElementById("ocean");
 
+  // Locked production fog (restored exactly when the intro ends).
+  const FOG_PRODUCTION_DENSITY = 0.00183;
+  // Dense enough that the distant world dissolves into cream before the reveal.
+  const FOG_INTRO_DENSITY = 0.0185;
+
   const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: false,
@@ -111,11 +116,12 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setClearColor(0x000000, 1);
+  renderer.setClearColor(0xf8e8ce, 1);
 
   const scene = new THREE.Scene();
-  // Softly dissolve distant / perimeter particles into the void when zoomed out
-  scene.fog = new THREE.FogExp2(0x000000, 0.00183);
+  // Softly dissolve distant / perimeter particles into the void when zoomed out.
+  // Colour matches cream; density starts dense for the intro mist.
+  scene.fog = new THREE.FogExp2(0xf8e8ce, FOG_INTRO_DENSITY);
 
   const camera = new THREE.PerspectiveCamera(
     42,
@@ -124,27 +130,46 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     600
   );
 
-  // ─── Centred elevated hero framing (ordinary pan/zoom navigation space) ─
-  // Composition reference: original-vision — raft left, figure centre, shelf right.
-  // Downward pitch ≈ 14.5° (atan(16.45/64.0)). FOV unchanged; bodies stay fixed.
-  // Look target sits in mid-ocean; bodies read further along the same view ray.
-  const HERO_LOOK_AT = Object.freeze({ x: 3.0, y: 0.95, z: -38 });
-  const HERO_POSITION = Object.freeze({ x: 3.0, y: 17.4, z: 26 });
+  // ─── Intro camera keyframes (Loading Shot 2 → Loading Shot 3) ─────────
+  // Shot 1 is plain cream (world concealed). Shot 2/3 match the attached refs.
+  // Final = interactive hero pose (same values after intro completes).
+  const INTRO_CAMERA_SHOTS = Object.freeze({
+    // Loading Shot 2 — distant thin ocean band, tiny centred cluster
+    distant: Object.freeze({
+      position: Object.freeze({ x: 4.0, y: 52.0, z: 168.0 }),
+      target: Object.freeze({ x: 4.0, y: 0.45, z: -94.0 }),
+    }),
+    // Loading Shot 3 — raft lower-left anchor, figure mid-right, shelf distant
+    final: Object.freeze({
+      position: Object.freeze({ x: -6.0, y: 17.2, z: -12.0 }),
+      target: Object.freeze({ x: 6.0, y: 1.05, z: -94.0 }),
+    }),
+  });
+
+  // Canonical hero = Shot 3 (ordinary pan/zoom navigation space after intro).
+  const HERO_LOOK_AT = INTRO_CAMERA_SHOTS.final.target;
+  const HERO_POSITION = INTRO_CAMERA_SHOTS.final.position;
 
   function heroDistancePull() {
     // Prefer aspect over width alone so portrait keeps the full trio in frame.
     // Desktop (~1.6 aspect) stays at the canonical hero distance.
     const w = window.innerWidth;
     const aspect = w / Math.max(window.innerHeight, 1);
-    if (aspect < 0.7) return 3.15;
-    if (aspect < 1.0) return 1.55;
-    if (aspect < 1.25) return 1.14;
+    if (aspect < 0.7) return 2.35;
+    if (aspect < 1.0) return 1.45;
+    if (aspect < 1.25) return 1.12;
     if (w < 1100) return 1.05;
     return 1;
   }
 
   // Scratch used only while applying hero / pitch clamps (no per-frame alloc).
   const _heroOffset = new THREE.Vector3();
+  const _introPos = new THREE.Vector3();
+  const _introLook = new THREE.Vector3();
+  const _introPosA = new THREE.Vector3();
+  const _introLookA = new THREE.Vector3();
+  const _introPosB = new THREE.Vector3();
+  const _introLookB = new THREE.Vector3();
 
   function writeHeroPose(outPos, outLook) {
     outLook.set(HERO_LOOK_AT.x, HERO_LOOK_AT.y, HERO_LOOK_AT.z);
@@ -158,14 +183,29 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     outPos.copy(outLook).add(_heroOffset);
   }
 
+  function writeDistantPose(outPos, outLook) {
+    const d = INTRO_CAMERA_SHOTS.distant;
+    outLook.set(d.target.x, d.target.y, d.target.z);
+    _heroOffset.set(
+      d.position.x - d.target.x,
+      d.position.y - d.target.y,
+      d.position.z - d.target.z
+    );
+    const pull = heroDistancePull();
+    // Distant shot pulls back a little less aggressively than the hero (already far).
+    const distantPull = 1 + (pull - 1) * 0.55;
+    if (distantPull !== 1) _heroOffset.multiplyScalar(distantPull);
+    outPos.copy(outLook).add(_heroOffset);
+  }
+
   const cameraState = {
     position: new THREE.Vector3(),
     lookAt: new THREE.Vector3(),
     targetPosition: new THREE.Vector3(),
     targetLookAt: new THREE.Vector3(),
   };
-  // Load directly into hero pose — no fly-in, no one-frame intermediate.
-  writeHeroPose(cameraState.position, cameraState.lookAt);
+  // Start at distant pose behind the cream veil (no flash of the final framing).
+  writeDistantPose(cameraState.position, cameraState.lookAt);
   cameraState.targetPosition.copy(cameraState.position);
   cameraState.targetLookAt.copy(cameraState.lookAt);
   camera.position.copy(cameraState.position);
@@ -1764,6 +1804,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
         }
 
         state.ready = true;
+        if (typeof onFloatingModelReady === "function") onFloatingModelReady();
 
         const t0 = uniforms.uTime.value;
         const surface0 = sampleWaveHeight(state.x, state.z, t0);
@@ -1779,6 +1820,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
           `[${config.id}] Failed to load GLB "${config.url}". Check the path and that you are serving over http(s), not file://.`,
           error
         );
+        // Fail open so the cream veil never traps the visitor permanently.
+        state.ready = true;
+        state.loadFailed = true;
+        if (typeof onFloatingModelReady === "function") onFloatingModelReady();
       }
     );
 
@@ -1851,6 +1896,201 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       z: (activeComposition.interests.rotZDeg * Math.PI) / 180,
     },
   });
+
+  // ─── One-time 1.5s opening camera + mist reveal ───────────────────────
+  const INTRO_DURATION_MS = 1500;
+  const INTRO_PLAIN_MS = 100;
+  const INTRO_SHOT2_MS = 575;
+  const prefersReducedMotion =
+    typeof matchMedia === "function" &&
+    matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const introVeil = document.getElementById("intro-veil");
+  const introState = {
+    active: !prefersReducedMotion,
+    started: false,
+    completed: false,
+    startPerf: 0,
+    warmed: false,
+    holdMs: null, // QA: freeze choreography at a fixed elapsed ms
+  };
+
+  // cubic-bezier(0.22, 1, 0.36, 1) — fast ease-out, no overshoot
+  function introEaseOut(t) {
+    const x1 = 0.22;
+    const y1 = 1.0;
+    const x2 = 0.36;
+    const y2 = 1.0;
+    // Newton solve for cubic Bézier x, then evaluate y
+    let u = t;
+    for (let i = 0; i < 5; i++) {
+      const u2 = u * u;
+      const u3 = u2 * u;
+      const x =
+        3 * (1 - u) * (1 - u) * u * x1 + 3 * (1 - u) * u2 * x2 + u3 - t;
+      const dx =
+        3 * (1 - u) * (1 - u) * x1 +
+        6 * (1 - u) * u * (x2 - x1) +
+        3 * u2 * (1 - x2);
+      if (Math.abs(dx) < 1e-6) break;
+      u -= x / dx;
+      u = Math.min(1, Math.max(0, u));
+    }
+    const u2 = u * u;
+    const u3 = u2 * u;
+    return 3 * (1 - u) * (1 - u) * u * y1 + 3 * (1 - u) * u2 * y2 + u3;
+  }
+
+  function introBlocksInput() {
+    return introState.active && !introState.completed;
+  }
+
+  function setFogDensity(density) {
+    if (scene.fog) scene.fog.density = density;
+  }
+
+  function applyIntroCameraPose(pos, look) {
+    camera.position.copy(pos);
+    cameraState.position.copy(pos);
+    cameraState.targetPosition.copy(pos);
+    cameraState.lookAt.copy(look);
+    cameraState.targetLookAt.copy(look);
+    camera.lookAt(look);
+  }
+
+  function finishIntro() {
+    if (introState.completed) return;
+    introState.completed = true;
+    introState.active = false;
+    introState.holdMs = null;
+
+    writeHeroPose(_introPos, _introLook);
+    applyIntroCameraPose(_introPos, _introLook);
+    setFogDensity(FOG_PRODUCTION_DENSITY);
+    if (scene.fog) scene.fog.color.copy(bgClearColor);
+    clampNavigation();
+    cameraState.position.copy(cameraState.targetPosition);
+    cameraState.lookAt.copy(cameraState.targetLookAt);
+    camera.position.copy(cameraState.position);
+    camera.lookAt(cameraState.lookAt);
+
+    document.body.classList.remove("is-intro");
+    if (introVeil) {
+      introVeil.classList.add("is-fading", "is-gone");
+      // Fully detach after fade so it cannot intercept gestures.
+      window.setTimeout(() => {
+        if (introVeil && introVeil.parentNode) introVeil.remove();
+      }, 400);
+    }
+  }
+
+  function introSkipToEnd() {
+    if (introState.completed) return;
+    finishIntro();
+  }
+
+  function sampleIntroAt(elapsedMs) {
+    writeDistantPose(_introPosA, _introLookA);
+    writeHeroPose(_introPosB, _introLookB);
+
+    let fogDens = FOG_PRODUCTION_DENSITY;
+    let veilOpacity = 0;
+
+    if (elapsedMs <= INTRO_PLAIN_MS) {
+      // Stage 1 — plain cream (world concealed by veil + dense fog)
+      applyIntroCameraPose(_introPosA, _introLookA);
+      fogDens = FOG_INTRO_DENSITY;
+      veilOpacity = 1;
+    } else if (elapsedMs <= INTRO_SHOT2_MS) {
+      // Stage 2 — mist clears on the distant Shot 2 framing
+      const u = introEaseOut(
+        (elapsedMs - INTRO_PLAIN_MS) / (INTRO_SHOT2_MS - INTRO_PLAIN_MS)
+      );
+      applyIntroCameraPose(_introPosA, _introLookA);
+      fogDens = THREE.MathUtils.lerp(FOG_INTRO_DENSITY, FOG_INTRO_DENSITY * 0.38, u);
+      veilOpacity = 1 - u;
+    } else {
+      // Stage 3 — continuous push from Shot 2 into final Shot 3
+      const u = introEaseOut(
+        (elapsedMs - INTRO_SHOT2_MS) / (INTRO_DURATION_MS - INTRO_SHOT2_MS)
+      );
+      _introPos.lerpVectors(_introPosA, _introPosB, u);
+      _introLook.lerpVectors(_introLookA, _introLookB, u);
+      applyIntroCameraPose(_introPos, _introLook);
+      fogDens = THREE.MathUtils.lerp(
+        FOG_INTRO_DENSITY * 0.38,
+        FOG_PRODUCTION_DENSITY,
+        u
+      );
+      veilOpacity = 0;
+    }
+
+    setFogDensity(fogDens);
+    if (introVeil && !introVeil.classList.contains("is-gone")) {
+      introVeil.style.opacity = String(Math.max(0, Math.min(1, veilOpacity)));
+      if (veilOpacity <= 0.001) {
+        introVeil.classList.add("is-gone");
+        introVeil.style.pointerEvents = "none";
+      } else {
+        introVeil.style.pointerEvents = "auto";
+      }
+    }
+  }
+
+  function warmIntroShaders() {
+    if (introState.warmed) return;
+    introState.warmed = true;
+    // Pre-render distant pose once behind the opaque veil to compile shaders.
+    writeDistantPose(_introPos, _introLook);
+    applyIntroCameraPose(_introPos, _introLook);
+    setFogDensity(FOG_INTRO_DENSITY);
+    try {
+      renderer.compile(scene, camera);
+    } catch (_) {
+      /* compile is best-effort */
+    }
+  }
+
+  function allModelsReady() {
+    return (
+      floatingModels.length >= 3 &&
+      floatingModels.every((m) => m.ready)
+    );
+  }
+
+  function beginIntroSequence() {
+    if (introState.started || introState.completed) return;
+    if (prefersReducedMotion) {
+      finishIntro();
+      return;
+    }
+    warmIntroShaders();
+    introState.started = true;
+    introState.startPerf = performance.now();
+    sampleIntroAt(0);
+  }
+
+  function onFloatingModelReady() {
+    if (!allModelsReady()) return;
+    if (prefersReducedMotion) {
+      finishIntro();
+      return;
+    }
+    beginIntroSequence();
+  }
+
+  // Safety: never trap behind the veil if a load hangs.
+  window.setTimeout(() => {
+    if (!introState.started && !introState.completed) {
+      floatingModels.forEach((m) => {
+        if (!m.ready) {
+          m.ready = true;
+          m.loadFailed = true;
+        }
+      });
+      onFloatingModelReady();
+    }
+  }, 12000);
 
   // Each model samples the shared ocean height at its own X/Z (same as GPU waveHeight)
   function updateFloatingModels(time) {
@@ -2129,6 +2369,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     "wheel",
     (event) => {
       event.preventDefault();
+      if (introBlocksInput()) {
+        introSkipToEnd();
+        return;
+      }
       if (event.ctrlKey) {
         zoomCamera(event.deltaY);
       } else {
@@ -2209,6 +2453,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   canvas.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
+    if (introBlocksInput()) {
+      introSkipToEnd();
+      return;
+    }
     canvas.setPointerCapture(event.pointerId);
     dragState.active = true;
     dragState.pointerId = event.pointerId;
@@ -2277,6 +2525,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   canvas.addEventListener("dblclick", (event) => {
     event.preventDefault();
+    if (introBlocksInput()) {
+      introSkipToEnd();
+      return;
+    }
     clearTimeout(clickTimer);
     clickTimer = null;
     const point = getOceanPoint(event.clientX, event.clientY);
@@ -2294,6 +2546,14 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   function applyResponsiveCameraDistance() {
     // Preserve look target (pan state); scale camera offset when viewport class changes.
+    if (introBlocksInput()) {
+      // Keep intro path responsive without replaying — resample current intro time.
+      if (introState.started) {
+        const elapsed = performance.now() - introState.startPerf;
+        sampleIntroAt(Math.min(elapsed, INTRO_DURATION_MS));
+      }
+      return;
+    }
     const pull = heroDistancePull();
     if (pull === lastHeroPull) return;
     const ratio = pull / lastHeroPull;
@@ -2363,12 +2623,25 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
     updateFloatingModels(time);
 
-    // Smooth camera ease
-    cameraState.position.lerp(cameraState.targetPosition, 0.045);
-    cameraState.lookAt.lerp(cameraState.targetLookAt, 0.055);
-    camera.position.copy(cameraState.position);
-    currentLook.copy(cameraState.lookAt);
-    camera.lookAt(currentLook);
+    if (introState.active && introState.started && !introState.completed) {
+      const elapsed =
+        introState.holdMs != null
+          ? introState.holdMs
+          : performance.now() - introState.startPerf;
+      if (elapsed >= INTRO_DURATION_MS) {
+        sampleIntroAt(INTRO_DURATION_MS);
+        finishIntro();
+      } else {
+        sampleIntroAt(elapsed);
+      }
+    } else if (!introBlocksInput()) {
+      // Smooth camera ease (interactive navigation)
+      cameraState.position.lerp(cameraState.targetPosition, 0.045);
+      cameraState.lookAt.lerp(cameraState.targetLookAt, 0.055);
+      camera.position.copy(cameraState.position);
+      currentLook.copy(cameraState.lookAt);
+      camera.lookAt(currentLook);
+    }
 
     syncContourWaveMatrices(camera);
     renderWaterDepthPass();
@@ -2428,6 +2701,12 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
           count: s.surfacePoints?.geometry?.attributes?.position?.count ?? 0,
         })),
         modelsReady: floatingModels.filter((m) => m.ready).length,
+        intro: {
+          active: introState.active,
+          started: introState.started,
+          completed: introState.completed,
+          fogDensity: scene.fog ? scene.fog.density : null,
+        },
         camera: {
           position: {
             x: cameraState.position.x,
@@ -2460,6 +2739,42 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
           heroPull: heroDistancePull(),
         },
       };
+    },
+    /** QA only: freeze intro at an elapsed ms (does not affect production visitors). */
+    seekIntro(ms) {
+      if (prefersReducedMotion) return false;
+      if (!introState.started) {
+        warmIntroShaders();
+        introState.started = true;
+        introState.active = true;
+        introState.completed = false;
+        document.body.classList.add("is-intro");
+        if (introVeil) {
+          introVeil.classList.remove("is-gone", "is-fading");
+          introVeil.style.opacity = "1";
+          introVeil.style.pointerEvents = "auto";
+          if (!introVeil.parentNode) document.body.prepend(introVeil);
+        }
+      }
+      introState.completed = false;
+      introState.active = true;
+      document.body.classList.add("is-intro");
+      const t = Math.max(0, Math.min(INTRO_DURATION_MS, Number(ms) || 0));
+      introState.holdMs = t;
+      introState.startPerf = performance.now() - t;
+      if (t >= INTRO_DURATION_MS) {
+        introState.holdMs = null;
+        sampleIntroAt(INTRO_DURATION_MS);
+        finishIntro();
+      } else {
+        // Re-attach veil if seeking back into early stages
+        if (introVeil && t <= INTRO_SHOT2_MS) {
+          introVeil.classList.remove("is-gone", "is-fading");
+          if (!introVeil.parentNode) document.body.prepend(introVeil);
+        }
+        sampleIntroAt(t);
+      }
+      return true;
     },
   };
 })();

@@ -22,6 +22,34 @@ body {
   touch-action: none;
 }
 
+.intro-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: #f8e8ce;
+  pointer-events: auto;
+  opacity: 1;
+  transition: none;
+}
+
+.intro-veil.is-fading {
+  transition: opacity 0.35s linear;
+}
+
+.intro-veil.is-gone {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+body.is-intro .hint {
+  opacity: 0;
+}
+
+body.is-intro #ocean {
+  cursor: default;
+}
+
 .hint {
   position: fixed;
   bottom: 0.75rem;
@@ -38,4 +66,6 @@ body {
   line-height: 1.45;
   white-space: normal;
   z-index: 2;
+  opacity: 1;
+  transition: opacity 0.35s ease;
 }

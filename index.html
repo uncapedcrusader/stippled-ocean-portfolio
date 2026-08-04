@@ -6,7 +6,9 @@
   <title>Stippled Ocean</title>
   <link rel="stylesheet" href="style.css" />
 </head>
-<body>
+<body class="is-intro">
+  <!-- Opaque cream from first paint — prevents black/WebGL flashes before JS. -->
+  <div id="intro-veil" class="intro-veil" aria-hidden="true"></div>
   <canvas id="ocean"></canvas>
   <div class="hint">Click to focus · Drag to splash · Double-click for a burst · Two-finger drag to pan · Pinch to zoom</div>
 
