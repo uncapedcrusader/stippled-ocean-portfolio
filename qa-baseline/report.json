@@ -1,0 +1,334 @@
+{
+  "exe": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  "cases": [
+    {
+      "name": "clean-dpr1",
+      "info": {
+        "hasTuneUI": false,
+        "bodyBg": "rgb(248, 232, 206)",
+        "hintText": "Click to focus · Drag to splash · Double-click for a burst · Two-finger drag to pan · Pinch to zoom",
+        "canvasW": 1440,
+        "canvasH": 900,
+        "cssW": 1440,
+        "cssH": 900,
+        "dpr": 1,
+        "storageKeys": [],
+        "perf": {
+          "memory": {
+            "geometries": 10,
+            "textures": 2
+          },
+          "render": {
+            "frame": 240,
+            "calls": 1,
+            "triangles": 2,
+            "points": 0,
+            "lines": 0
+          },
+          "dpr": 1,
+          "size": {
+            "x": 1440,
+            "y": 900
+          },
+          "oceanVertices": 7920000,
+          "activeSplashes": 0,
+          "activeSplashUniform": 0,
+          "look": {
+            "background": "#f8e8ce",
+            "bodies": "#d14a21",
+            "waves": "#0873b5",
+            "waveDensity": 6,
+            "waveDotScale": 1.5,
+            "contourDensity": 1.95,
+            "surfaceStrength": 0.25
+          },
+          "composition": {
+            "projects": {
+              "x": -35,
+              "z": -100,
+              "scale": 11.63
+            },
+            "about": {
+              "x": 2.7,
+              "z": -91.3,
+              "scale": 15.6
+            },
+            "interests": {
+              "x": 46,
+              "z": -92,
+              "scale": 12.81
+            }
+          },
+          "surfacePointCounts": [
+            {
+              "id": "about",
+              "count": 3514
+            },
+            {
+              "id": "interests",
+              "count": 3415
+            },
+            {
+              "id": "projects",
+              "count": 3479
+            }
+          ],
+          "modelsReady": 3
+        }
+      },
+      "fps": {
+        "frames": 45,
+        "elapsedMs": 2526.2000000476837,
+        "fps": 17.8133164433341,
+        "canvasBytes": 5184000
+      },
+      "transfer": {
+        "scriptTransfer": 300,
+        "scriptDecoded": 0,
+        "cssTransfer": 300,
+        "nav": {
+          "domContentLoaded": 2881.7000000476837,
+          "load": 2881.9000000953674
+        }
+      }
+    },
+    {
+      "name": "dirty-storage",
+      "info": {
+        "hasTuneUI": false,
+        "bodyBg": "rgb(248, 232, 206)",
+        "hintText": "Click to focus · Drag to splash · Double-click for a burst · Two-finger drag to pan · Pinch to zoom",
+        "canvasW": 1440,
+        "canvasH": 900,
+        "cssW": 1440,
+        "cssH": 900,
+        "dpr": 1,
+        "storageKeys": [
+          "stippled-ocean-appearance-mark-making-v1",
+          "stippled-ocean-appearance-colours-v1",
+          "stippled-ocean-float-tune-v4"
+        ],
+        "perf": {
+          "memory": {
+            "geometries": 10,
+            "textures": 2
+          },
+          "render": {
+            "frame": 234,
+            "calls": 1,
+            "triangles": 2,
+            "points": 0,
+            "lines": 0
+          },
+          "dpr": 1,
+          "size": {
+            "x": 1440,
+            "y": 900
+          },
+          "oceanVertices": 7920000,
+          "activeSplashes": 0,
+          "activeSplashUniform": 0,
+          "look": {
+            "background": "#f8e8ce",
+            "bodies": "#d14a21",
+            "waves": "#0873b5",
+            "waveDensity": 6,
+            "waveDotScale": 1.5,
+            "contourDensity": 1.95,
+            "surfaceStrength": 0.25
+          },
+          "composition": {
+            "projects": {
+              "x": -35,
+              "z": -100,
+              "scale": 11.63
+            },
+            "about": {
+              "x": 2.7,
+              "z": -91.3,
+              "scale": 15.6
+            },
+            "interests": {
+              "x": 46,
+              "z": -92,
+              "scale": 12.81
+            }
+          },
+          "surfacePointCounts": [
+            {
+              "id": "about",
+              "count": 3514
+            },
+            {
+              "id": "interests",
+              "count": 3415
+            },
+            {
+              "id": "projects",
+              "count": 3479
+            }
+          ],
+          "modelsReady": 3
+        }
+      }
+    },
+    {
+      "name": "clean-dpr2",
+      "info": {
+        "hasTuneUI": false,
+        "bodyBg": "rgb(248, 232, 206)",
+        "hintText": "Click to focus · Drag to splash · Double-click for a burst · Two-finger drag to pan · Pinch to zoom",
+        "canvasW": 2880,
+        "canvasH": 1800,
+        "cssW": 1440,
+        "cssH": 900,
+        "dpr": 2,
+        "storageKeys": [],
+        "perf": {
+          "memory": {
+            "geometries": 10,
+            "textures": 2
+          },
+          "render": {
+            "frame": 116,
+            "calls": 1,
+            "triangles": 2,
+            "points": 0,
+            "lines": 0
+          },
+          "dpr": 2,
+          "size": {
+            "x": 1440,
+            "y": 900
+          },
+          "oceanVertices": 7920000,
+          "activeSplashes": 0,
+          "activeSplashUniform": 0,
+          "look": {
+            "background": "#f8e8ce",
+            "bodies": "#d14a21",
+            "waves": "#0873b5",
+            "waveDensity": 6,
+            "waveDotScale": 1.5,
+            "contourDensity": 1.95,
+            "surfaceStrength": 0.25
+          },
+          "composition": {
+            "projects": {
+              "x": -35,
+              "z": -100,
+              "scale": 11.63
+            },
+            "about": {
+              "x": 2.7,
+              "z": -91.3,
+              "scale": 15.6
+            },
+            "interests": {
+              "x": 46,
+              "z": -92,
+              "scale": 12.81
+            }
+          },
+          "surfacePointCounts": [
+            {
+              "id": "about",
+              "count": 3514
+            },
+            {
+              "id": "interests",
+              "count": 3415
+            },
+            {
+              "id": "projects",
+              "count": 3479
+            }
+          ],
+          "modelsReady": 3
+        }
+      },
+      "fps": {
+        "frames": 27,
+        "elapsedMs": 2505.800000190735,
+        "fps": 10.775001994550575,
+        "canvasBytes": 20736000
+      }
+    },
+    {
+      "name": "mobile",
+      "info": {
+        "hasTuneUI": false,
+        "bodyBg": "rgb(248, 232, 206)",
+        "hintText": "Click to focus · Drag to splash · Double-click for a burst · Two-finger drag to pan · Pinch to zoom",
+        "canvasW": 780,
+        "canvasH": 1688,
+        "cssW": 390,
+        "cssH": 844,
+        "dpr": 2,
+        "storageKeys": [],
+        "perf": {
+          "memory": {
+            "geometries": 8,
+            "textures": 2
+          },
+          "render": {
+            "frame": 220,
+            "calls": 1,
+            "triangles": 2,
+            "points": 0,
+            "lines": 0
+          },
+          "dpr": 2,
+          "size": {
+            "x": 390,
+            "y": 844
+          },
+          "oceanVertices": 7920000,
+          "activeSplashes": 0,
+          "activeSplashUniform": 0,
+          "look": {
+            "background": "#f8e8ce",
+            "bodies": "#d14a21",
+            "waves": "#0873b5",
+            "waveDensity": 6,
+            "waveDotScale": 1.5,
+            "contourDensity": 1.95,
+            "surfaceStrength": 0.25
+          },
+          "composition": {
+            "projects": {
+              "x": -35,
+              "z": -100,
+              "scale": 11.63
+            },
+            "about": {
+              "x": 2.7,
+              "z": -91.3,
+              "scale": 15.6
+            },
+            "interests": {
+              "x": 46,
+              "z": -92,
+              "scale": 12.81
+            }
+          },
+          "surfacePointCounts": [
+            {
+              "id": "about",
+              "count": 3514
+            },
+            {
+              "id": "interests",
+              "count": 3415
+            },
+            {
+              "id": "projects",
+              "count": 3479
+            }
+          ],
+          "modelsReady": 3
+        }
+      }
+    }
+  ]
+}

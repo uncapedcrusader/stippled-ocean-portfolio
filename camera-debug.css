@@ -1,0 +1,282 @@
+/* Temporary camera calibration styles — only loaded with ?cameraDebug=1 */
+
+.cam-panel {
+  position: fixed;
+  top: 0.5rem;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  z-index: 40;
+  width: min(22rem, 92vw);
+  display: flex;
+  flex-direction: column;
+  background: rgba(20, 18, 16, 0.88);
+  color: #f4efe6;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.72rem;
+  overflow: hidden;
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+
+.cam-panel.is-hidden {
+  display: none;
+}
+
+.cam-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.cam-panel__body {
+  overflow: auto;
+  padding: 0.45rem 0.65rem 0.85rem;
+  overscroll-behavior: contain;
+}
+
+.cam-sec {
+  margin: 0.65rem 0 0.85rem;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.cam-sec h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  font-weight: 600;
+}
+
+.cam-field {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.2rem;
+  margin: 0.35rem 0;
+}
+
+.cam-field input[type="number"],
+.cam-field input[type="text"],
+#cam-pose-name,
+#cam-ref-fit {
+  width: 100%;
+  padding: 0.25rem 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.35);
+  color: inherit;
+  font: inherit;
+}
+
+.cam-field input[type="range"] {
+  width: 100%;
+}
+
+.cam-btn,
+.cam-pose button {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  border-radius: 4px;
+  padding: 0.28rem 0.45rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cam-btn:hover,
+.cam-pose button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.cam-btn--accent {
+  width: 100%;
+  margin-top: 0.35rem;
+  background: rgba(209, 74, 33, 0.55);
+  border-color: rgba(209, 74, 33, 0.8);
+}
+
+.cam-row {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  margin-top: 0.35rem;
+}
+
+.cam-row--wrap {
+  flex-wrap: wrap;
+}
+
+.cam-check {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  margin: 0.25rem 0;
+}
+
+.cam-readout {
+  margin: 0.25rem 0 0;
+  opacity: 0.85;
+  white-space: pre-wrap;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.cam-warn {
+  color: #ffb4a2;
+  margin: 0.35rem 0 0;
+}
+
+.cam-warn.is-hidden {
+  display: none;
+}
+
+.cam-pose-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0.5rem 0;
+  max-height: 14rem;
+  overflow: auto;
+}
+
+.cam-pose {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 0.4rem;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.cam-pose.is-applied {
+  border-color: rgba(209, 74, 33, 0.85);
+}
+
+.cam-pose header {
+  margin-bottom: 0.35rem;
+}
+
+.cam-tag {
+  display: inline-block;
+  margin-left: 0.25rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 999px;
+  background: rgba(209, 74, 33, 0.45);
+  font-size: 0.62rem;
+}
+
+.cam-show-panel {
+  position: fixed;
+  top: 0.65rem;
+  right: 0.65rem;
+  z-index: 41;
+  appearance: none;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  background: rgba(248, 232, 206, 0.92);
+  color: #3a2a1f;
+  border-radius: 999px;
+  padding: 0.4rem 0.7rem;
+  font: 0.72rem/1 "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.cam-show-panel.is-hidden {
+  display: none;
+}
+
+/* Guides / overlay — never capture pointer */
+.cam-guides,
+.cam-ref-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.cam-ref-overlay {
+  z-index: 29;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.cam-ref-overlay.is-hidden {
+  display: none;
+}
+
+.cam-ref-overlay img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.cam-guide-hline,
+.cam-guide-vline,
+.cam-guide-horizon {
+  position: absolute;
+  background: rgba(209, 74, 33, 0.55);
+}
+
+.cam-guide-hline,
+.cam-guide-horizon {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+.cam-guide-vline {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.cam-guide-horizon {
+  background: rgba(8, 115, 181, 0.85);
+}
+
+.cam-guide-horizon span {
+  position: absolute;
+  left: 0.5rem;
+  top: 0.15rem;
+  color: rgba(8, 115, 181, 0.95);
+  font: 0.62rem/1 "Segoe UI", system-ui, sans-serif;
+  background: rgba(248, 232, 206, 0.75);
+  padding: 0.1rem 0.25rem;
+}
+
+.cam-guide-nav {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3.25rem;
+  border-bottom: 1px dashed rgba(209, 74, 33, 0.45);
+  background: rgba(209, 74, 33, 0.06);
+}
+
+.cam-guide-text {
+  position: absolute;
+  top: 3.5rem;
+  left: 1rem;
+  width: min(22rem, 42vw);
+  height: min(10rem, 22vh);
+  border: 1px dashed rgba(209, 74, 33, 0.4);
+  background: rgba(209, 74, 33, 0.05);
+}
+
+.cam-guide-dims {
+  position: absolute;
+  left: 0.5rem;
+  bottom: 0.5rem;
+  padding: 0.2rem 0.4rem;
+  background: rgba(248, 232, 206, 0.8);
+  color: #3a2a1f;
+  font: 0.62rem/1 "Segoe UI", system-ui, sans-serif;
+}

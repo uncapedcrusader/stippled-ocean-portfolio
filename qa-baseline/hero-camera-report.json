@@ -1,0 +1,568 @@
+{
+  "wide": {
+    "name": "hero-centred-dpr1.png",
+    "info": {
+      "memory": {
+        "geometries": 10,
+        "textures": 2
+      },
+      "render": {
+        "frame": 212,
+        "calls": 1,
+        "triangles": 2,
+        "points": 0,
+        "lines": 0
+      },
+      "dpr": 1,
+      "size": {
+        "x": 1440,
+        "y": 900
+      },
+      "oceanVertices": 7920000,
+      "activeSplashes": 0,
+      "activeSplashUniform": 0,
+      "look": {
+        "background": "#f8e8ce",
+        "bodies": "#d14a21",
+        "waves": "#0873b5",
+        "waveDensity": 6,
+        "waveDotScale": 1.5,
+        "contourDensity": 1.95,
+        "surfaceStrength": 0.25
+      },
+      "composition": {
+        "projects": {
+          "x": -35,
+          "z": -100,
+          "scale": 11.63
+        },
+        "about": {
+          "x": 2.7,
+          "z": -91.3,
+          "scale": 15.6
+        },
+        "interests": {
+          "x": 46,
+          "z": -92,
+          "scale": 12.81
+        }
+      },
+      "surfacePointCounts": [
+        {
+          "id": "interests",
+          "count": 3415
+        },
+        {
+          "id": "about",
+          "count": 3514
+        },
+        {
+          "id": "projects",
+          "count": 3479
+        }
+      ],
+      "modelsReady": 3,
+      "camera": {
+        "position": {
+          "x": 3,
+          "y": 17.4,
+          "z": 25.999999999999993
+        },
+        "lookAt": {
+          "x": 3,
+          "y": 0.95,
+          "z": -38
+        },
+        "targetPosition": {
+          "x": 3,
+          "y": 17.4,
+          "z": 25.999999999999993
+        },
+        "targetLookAt": {
+          "x": 3,
+          "y": 0.95,
+          "z": -38
+        },
+        "pitchDeg": 14.414774951247532,
+        "dist": 66.08027315318846,
+        "heroPull": 1
+      }
+    },
+    "afterPan": {
+      "position": {
+        "x": 12.64314622546108,
+        "y": 17.4,
+        "z": 28.142921383435787
+      },
+      "lookAt": {
+        "x": 14.148047724773038,
+        "y": 0.95,
+        "z": -35.52265606116155
+      },
+      "targetPosition": {
+        "x": 24.410008501633058,
+        "y": 17.4,
+        "z": 30.75777966702956
+      },
+      "targetLookAt": {
+        "x": 24.410008501633058,
+        "y": 0.95,
+        "z": -33.24222033297043
+      },
+      "pitchDeg": 14.483438959073027,
+      "dist": 65.773649586112,
+      "heroPull": 1
+    },
+    "back": {
+      "position": {
+        "x": 6.83960177687182,
+        "y": 17.4,
+        "z": 26.85324483930484
+      },
+      "lookAt": {
+        "x": 6.596126740555981,
+        "y": 0.95,
+        "z": -37.2008607243209
+      },
+      "targetPosition": {
+        "x": 3,
+        "y": 17.4,
+        "z": 25.999999999999993
+      },
+      "targetLookAt": {
+        "x": 3,
+        "y": 0.95,
+        "z": -38
+      },
+      "pitchDeg": 14.403005991985445,
+      "dist": 66.13312498022016,
+      "heroPull": 1
+    },
+    "errors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ]
+  },
+  "laptop": {
+    "name": "hero-centred-laptop.png",
+    "info": {
+      "memory": {
+        "geometries": 10,
+        "textures": 2
+      },
+      "render": {
+        "frame": 204,
+        "calls": 1,
+        "triangles": 2,
+        "points": 0,
+        "lines": 0
+      },
+      "dpr": 1,
+      "size": {
+        "x": 1280,
+        "y": 800
+      },
+      "oceanVertices": 7920000,
+      "activeSplashes": 0,
+      "activeSplashUniform": 0,
+      "look": {
+        "background": "#f8e8ce",
+        "bodies": "#d14a21",
+        "waves": "#0873b5",
+        "waveDensity": 6,
+        "waveDotScale": 1.5,
+        "contourDensity": 1.95,
+        "surfaceStrength": 0.25
+      },
+      "composition": {
+        "projects": {
+          "x": -35,
+          "z": -100,
+          "scale": 11.63
+        },
+        "about": {
+          "x": 2.7,
+          "z": -91.3,
+          "scale": 15.6
+        },
+        "interests": {
+          "x": 46,
+          "z": -92,
+          "scale": 12.81
+        }
+      },
+      "surfacePointCounts": [
+        {
+          "id": "about",
+          "count": 3514
+        },
+        {
+          "id": "interests",
+          "count": 3415
+        },
+        {
+          "id": "projects",
+          "count": 3479
+        }
+      ],
+      "modelsReady": 3,
+      "camera": {
+        "position": {
+          "x": 3,
+          "y": 17.4,
+          "z": 25.999999999999993
+        },
+        "lookAt": {
+          "x": 3,
+          "y": 0.95,
+          "z": -38
+        },
+        "targetPosition": {
+          "x": 3,
+          "y": 17.4,
+          "z": 25.999999999999993
+        },
+        "targetLookAt": {
+          "x": 3,
+          "y": 0.95,
+          "z": -38
+        },
+        "pitchDeg": 14.414774951247532,
+        "dist": 66.08027315318846,
+        "heroPull": 1
+      }
+    },
+    "afterPan": {
+      "position": {
+        "x": 12.64314622546108,
+        "y": 17.4,
+        "z": 28.142921383435787
+      },
+      "lookAt": {
+        "x": 14.148047724773038,
+        "y": 0.95,
+        "z": -35.52265606116155
+      },
+      "targetPosition": {
+        "x": 24.410008501633058,
+        "y": 17.4,
+        "z": 30.75777966702956
+      },
+      "targetLookAt": {
+        "x": 24.410008501633058,
+        "y": 0.95,
+        "z": -33.24222033297043
+      },
+      "pitchDeg": 14.483438959073027,
+      "dist": 65.773649586112,
+      "heroPull": 1
+    },
+    "back": {
+      "position": {
+        "x": 5.656520408273748,
+        "y": 17.4,
+        "z": 26.59033786850527
+      },
+      "lookAt": {
+        "x": 5.287122664044937,
+        "y": 0.95,
+        "z": -37.49175051910113
+      },
+      "targetPosition": {
+        "x": 3,
+        "y": 17.4,
+        "z": 25.999999999999993
+      },
+      "targetLookAt": {
+        "x": 3,
+        "y": 0.95,
+        "z": -38
+      },
+      "pitchDeg": 14.396848507131493,
+      "dist": 66.160811715172,
+      "heroPull": 1
+    },
+    "errors": []
+  },
+  "narrow": {
+    "name": "hero-centred-narrow.png",
+    "info": {
+      "memory": {
+        "geometries": 10,
+        "textures": 2
+      },
+      "render": {
+        "frame": 124,
+        "calls": 1,
+        "triangles": 2,
+        "points": 0,
+        "lines": 0
+      },
+      "dpr": 2,
+      "size": {
+        "x": 834,
+        "y": 1100
+      },
+      "oceanVertices": 7920000,
+      "activeSplashes": 0,
+      "activeSplashUniform": 0,
+      "look": {
+        "background": "#f8e8ce",
+        "bodies": "#d14a21",
+        "waves": "#0873b5",
+        "waveDensity": 6,
+        "waveDotScale": 1.5,
+        "contourDensity": 1.95,
+        "surfaceStrength": 0.25
+      },
+      "composition": {
+        "projects": {
+          "x": -35,
+          "z": -100,
+          "scale": 11.63
+        },
+        "about": {
+          "x": 2.7,
+          "z": -91.3,
+          "scale": 15.6
+        },
+        "interests": {
+          "x": 46,
+          "z": -92,
+          "scale": 12.81
+        }
+      },
+      "surfacePointCounts": [
+        {
+          "id": "about",
+          "count": 3514
+        },
+        {
+          "id": "interests",
+          "count": 3415
+        },
+        {
+          "id": "projects",
+          "count": 3479
+        }
+      ],
+      "modelsReady": 3,
+      "camera": {
+        "position": {
+          "x": 3,
+          "y": 18.2225,
+          "z": 29.200000000000003
+        },
+        "lookAt": {
+          "x": 3,
+          "y": 0.95,
+          "z": -38
+        },
+        "targetPosition": {
+          "x": 3,
+          "y": 18.2225,
+          "z": 29.200000000000003
+        },
+        "targetLookAt": {
+          "x": 3,
+          "y": 0.95,
+          "z": -38
+        },
+        "pitchDeg": 14.414774951247532,
+        "dist": 69.3842868108479,
+        "heroPull": 1.05
+      }
+    },
+    "afterPan": {
+      "position": {
+        "x": 11.295165495436404,
+        "y": 18.2225,
+        "z": 31.043370110096976
+      },
+      "lookAt": {
+        "x": 12.712469240305511,
+        "y": 0.95,
+        "z": -35.841673502154336
+      },
+      "targetPosition": {
+        "x": 25.480508926714716,
+        "y": 18.2225,
+        "z": 34.19566865038105
+      },
+      "targetLookAt": {
+        "x": 25.480508926714716,
+        "y": 0.95,
+        "z": -33.00433134961895
+      },
+      "pitchDeg": 14.47669257677263,
+      "dist": 69.09382798172338,
+      "heroPull": 1.05
+    },
+    "back": {
+      "position": {
+        "x": 7.15791520974134,
+        "y": 18.2225,
+        "z": 30.1239811577203
+      },
+      "lookAt": {
+        "x": 7.157256145898519,
+        "y": 0.95,
+        "z": -37.07616530091144
+      },
+      "targetPosition": {
+        "x": 3,
+        "y": 18.2225,
+        "z": 29.200000000000003
+      },
+      "targetLookAt": {
+        "x": 3,
+        "y": 0.95,
+        "z": -38
+      },
+      "pitchDeg": 14.414744843432134,
+      "dist": 69.38442866195498,
+      "heroPull": 1.05
+    },
+    "errors": []
+  },
+  "mobile": {
+    "name": "hero-centred-mobile.png",
+    "info": {
+      "memory": {
+        "geometries": 7,
+        "textures": 2
+      },
+      "render": {
+        "frame": 196,
+        "calls": 1,
+        "triangles": 2,
+        "points": 0,
+        "lines": 0
+      },
+      "dpr": 2,
+      "size": {
+        "x": 390,
+        "y": 844
+      },
+      "oceanVertices": 7920000,
+      "activeSplashes": 0,
+      "activeSplashUniform": 0,
+      "look": {
+        "background": "#f8e8ce",
+        "bodies": "#d14a21",
+        "waves": "#0873b5",
+        "waveDensity": 6,
+        "waveDotScale": 1.5,
+        "contourDensity": 1.95,
+        "surfaceStrength": 0.25
+      },
+      "composition": {
+        "projects": {
+          "x": -35,
+          "z": -100,
+          "scale": 11.63
+        },
+        "about": {
+          "x": 2.7,
+          "z": -91.3,
+          "scale": 15.6
+        },
+        "interests": {
+          "x": 46,
+          "z": -92,
+          "scale": 12.81
+        }
+      },
+      "surfacePointCounts": [
+        {
+          "id": "about",
+          "count": 3514
+        },
+        {
+          "id": "interests",
+          "count": 3415
+        },
+        {
+          "id": "projects",
+          "count": 3479
+        }
+      ],
+      "modelsReady": 3,
+      "camera": {
+        "position": {
+          "x": 3,
+          "y": 20.689999999999998,
+          "z": 38.8
+        },
+        "lookAt": {
+          "x": 3,
+          "y": 0.95,
+          "z": -38
+        },
+        "targetPosition": {
+          "x": 3,
+          "y": 20.689999999999998,
+          "z": 38.8
+        },
+        "targetLookAt": {
+          "x": 3,
+          "y": 0.95,
+          "z": -38
+        },
+        "pitchDeg": 14.414774951247532,
+        "dist": 79.29632778382616,
+        "heroPull": 1.2
+      }
+    },
+    "afterPan": {
+      "position": {
+        "x": 16.393513439689766,
+        "y": 20.689999999999998,
+        "z": 41.776336319931055
+      },
+      "lookAt": {
+        "x": 18.299821551155027,
+        "y": 0.95,
+        "z": -34.600039655298886
+      },
+      "targetPosition": {
+        "x": 28.692010201959675,
+        "y": 20.689999999999998,
+        "z": 44.50933560043548
+      },
+      "targetLookAt": {
+        "x": 28.692010201959675,
+        "y": 0.95,
+        "z": -32.29066439956452
+      },
+      "pitchDeg": 14.487047458178369,
+      "dist": 78.90914026730692,
+      "heroPull": 1.2
+    },
+    "back": {
+      "position": {
+        "x": 8.092902020073813,
+        "y": 20.689999999999998,
+        "z": 39.93175600446085
+      },
+      "lookAt": {
+        "x": 7.663954921271245,
+        "y": 0.95,
+        "z": -36.963565573050836
+      },
+      "targetPosition": {
+        "x": 3,
+        "y": 20.689999999999998,
+        "z": 38.8
+      },
+      "targetLookAt": {
+        "x": 3,
+        "y": 0.95,
+        "z": -38
+      },
+      "pitchDeg": 14.397434510593326,
+      "dist": 79.38981090872117,
+      "heroPull": 1.2
+    },
+    "errors": []
+  }
+}

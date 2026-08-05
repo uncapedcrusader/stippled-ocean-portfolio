@@ -42,30 +42,6 @@ body {
   visibility: hidden;
 }
 
-body.is-intro .hint {
-  opacity: 0;
-}
-
 body.is-intro #ocean {
   cursor: default;
-}
-
-.hint {
-  position: fixed;
-  bottom: 0.75rem;
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: min(36rem, calc(100% - 2rem));
-  font-family: "Segoe UI", system-ui, sans-serif;
-  font-size: 0.68rem;
-  letter-spacing: 0.08em;
-  color: rgba(209, 74, 33, 0.42);
-  pointer-events: none;
-  user-select: none;
-  text-align: center;
-  line-height: 1.45;
-  white-space: normal;
-  z-index: 2;
-  opacity: 1;
-  transition: opacity 0.35s ease;
 }

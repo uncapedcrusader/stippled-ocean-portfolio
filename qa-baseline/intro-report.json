@@ -1,0 +1,107 @@
+{
+  "errors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ],
+  "shot1": {
+    "camera": {
+      "position": {
+        "x": 4,
+        "y": 52,
+        "z": 168
+      },
+      "lookAt": {
+        "x": 4,
+        "y": 0.45,
+        "z": -94
+      },
+      "targetPosition": {
+        "x": 4,
+        "y": 52,
+        "z": 168
+      },
+      "targetLookAt": {
+        "x": 4,
+        "y": 0.45,
+        "z": -94
+      },
+      "pitchDeg": 11.131087575138254,
+      "dist": 267.023224645348,
+      "heroPull": 1
+    },
+    "intro": {
+      "active": true,
+      "started": true,
+      "completed": false,
+      "fogDensity": 0.0185
+    },
+    "fog": 0.0185
+  },
+  "shot2": {
+    "camera": {
+      "position": {
+        "x": 4,
+        "y": 52,
+        "z": 168
+      },
+      "lookAt": {
+        "x": 4,
+        "y": 0.45,
+        "z": -94
+      },
+      "targetPosition": {
+        "x": 4,
+        "y": 52,
+        "z": 168
+      },
+      "targetLookAt": {
+        "x": 4,
+        "y": 0.45,
+        "z": -94
+      },
+      "pitchDeg": 11.131087575138254,
+      "dist": 267.023224645348,
+      "heroPull": 1
+    },
+    "intro": {
+      "active": true,
+      "started": true,
+      "completed": false,
+      "fogDensity": 0.007030252301438731
+    },
+    "fog": 0.007030252301438731
+  },
+  "shot3": {
+    "camera": {
+      "position": {
+        "x": -6.000000000000005,
+        "y": 15.600000000000003,
+        "z": -11.999999999999986
+      },
+      "lookAt": {
+        "x": 6,
+        "y": 1.05,
+        "z": -94
+      },
+      "targetPosition": {
+        "x": -6.000000000000005,
+        "y": 15.600000000000003,
+        "z": -11.999999999999986
+      },
+      "targetLookAt": {
+        "x": 6,
+        "y": 1.05,
+        "z": -94
+      },
+      "pitchDeg": 9.95787532666475,
+      "dist": 84.14096802390618,
+      "heroPull": 1
+    },
+    "intro": {
+      "active": false,
+      "started": true,
+      "completed": true,
+      "fogDensity": 0.00183
+    },
+    "fog": 0.00183
+  }
+}
