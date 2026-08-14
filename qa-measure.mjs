@@ -11,7 +11,7 @@ const EDGE =
 const CHROME =
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const exe = fs.existsSync(EDGE) ? EDGE : CHROME;
-const BASE = "http://localhost:5173";
+const BASE = "http://localhost:5173/?qa=1";
 const OUT = path.resolve("qa-baseline");
 
 fs.mkdirSync(OUT, { recursive: true });
