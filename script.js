@@ -2076,9 +2076,37 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     typeof matchMedia === "function" &&
     matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  // The opening choreography is a first-arrival moment, not a route transition.
+  // sessionStorage survives iframe destruction/recreation within the same tab,
+  // so returning from Framer Projects cannot replay the intro.
+  const INTRO_SESSION_KEY = "shaardul:intro-seen:v1";
+
+  function hasSeenIntroThisSession() {
+    try {
+      return sessionStorage.getItem(INTRO_SESSION_KEY) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function markIntroSeenThisSession() {
+    try {
+      sessionStorage.setItem(INTRO_SESSION_KEY, "1");
+    } catch (_) {
+      /* Storage can be unavailable in unusually strict iframe contexts. */
+    }
+  }
+
+  const introWasSeenThisSession = hasSeenIntroThisSession();
+  const skipIntroOnLoad = prefersReducedMotion || introWasSeenThisSession;
+
+  // Mark the first boot immediately. The current boot may still play the intro,
+  // but every later recreation in this tab starts at the canonical hero pose.
+  if (!introWasSeenThisSession) markIntroSeenThisSession();
+
   const introVeil = document.getElementById("intro-veil");
   const introState = {
-    active: !prefersReducedMotion,
+    active: !skipIntroOnLoad,
     started: false,
     completed: false,
     startPerf: 0,
@@ -2256,7 +2284,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   function beginIntroSequence() {
     if (introState.started || introState.completed) return;
-    if (prefersReducedMotion) {
+    if (skipIntroOnLoad) {
       finishIntro();
       return;
     }
@@ -2268,11 +2296,17 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   function onFloatingModelReady() {
     if (!allModelsReady()) return;
-    if (prefersReducedMotion) {
+    if (skipIntroOnLoad) {
       finishIntro();
       return;
     }
     beginIntroSequence();
+  }
+
+  // Defer until this module has finished initializing (finishIntro uses camera
+  // bounds declared later), then reveal the already-landed hero immediately.
+  if (skipIntroOnLoad) {
+    queueMicrotask(() => finishIntro());
   }
 
   // Safety: never trap behind the veil if a load hangs.
@@ -2440,6 +2474,12 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       active: false,
       destination: null,
     },
+    hoverPigment: {
+      pointerBody: null,
+      lastBody: null,
+      lastTime: -Infinity,
+      cooldownMs: 900,
+    },
     pigment: {
       active: false,
       startTime: 0,
@@ -2546,6 +2586,24 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     uniforms.uPigmentColor.value.set(0xbb4121);
   }
 
+  function triggerHoverPigmentRipple(body) {
+    if (!body) return;
+    const hoverPigment = interaction.hoverPigment;
+    const now = performance.now();
+
+    // Prevent raycast-edge jitter from repeatedly restarting the same wave.
+    if (
+      hoverPigment.lastBody === body &&
+      now - hoverPigment.lastTime < hoverPigment.cooldownMs
+    ) {
+      return;
+    }
+
+    hoverPigment.lastBody = body;
+    hoverPigment.lastTime = now;
+    triggerPigmentRipple(body);
+  }
+
   function syncPigmentUniforms(time) {
     if (!interaction.pigment.active) {
       uniforms.uPigmentStrength.value = 0;
@@ -2614,6 +2672,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     const pose = BODY_FOCUS_POSES[body.id];
     if (!pose) return;
 
+    const pigmentAlreadyHandledByHover =
+      !opts.fromKeyboard &&
+      interaction.hoverPigment.pointerBody === body;
+
     interaction.focusedBody = body;
     if (opts.fromKeyboard) {
       // Keyboard focus must not invent a pointer hover / local stipple influence.
@@ -2624,7 +2686,9 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       interaction.hoveredBody = body;
       interaction.nearbyBody = body;
     }
-    triggerPigmentRipple(body);
+    // Desktop gets the wave on hover-entry. Preserve click feedback for touch
+    // and keyboard users, who do not have a meaningful hover state.
+    if (!pigmentAlreadyHandledByHover) triggerPigmentRipple(body);
 
     startCameraTravel(pose.position, pose.target, () => {
       interaction.focusedBody = body;
@@ -2680,13 +2744,16 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     const pose = BODY_FOCUS_POSES[body.id];
     if (!pose) return false;
 
+    const pigmentAlreadyHandledByHover =
+      interaction.hoverPigment.pointerBody === body;
+
     captureHomePoseIfNeeded();
     interaction.handoff.active = true;
     interaction.handoff.destination = destination;
     interaction.focusedBody = body;
     interaction.hoveredBody = body;
     interaction.nearbyBody = body;
-    triggerPigmentRipple(body);
+    if (!pigmentAlreadyHandledByHover) triggerPigmentRipple(body);
 
     const frac = HANDOFF_CAMERA_FRACTION;
     const endPos = {
@@ -2798,6 +2865,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
     const hit = pickBodyAtClient(clientX, clientY);
     if (hit) {
+      if (interaction.hoverPigment.pointerBody !== hit.body) {
+        interaction.hoverPigment.pointerBody = hit.body;
+        triggerHoverPigmentRipple(hit.body);
+      }
       interaction.hoveredBody = hit.body;
       interaction.nearbyBody = hit.body;
       interaction.hoverWorld.copy(hit.point);
@@ -2805,6 +2876,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     }
 
     interaction.hoveredBody = null;
+    interaction.hoverPigment.pointerBody = null;
     interaction.nearbyBody = findNearbyBody(clientX, clientY);
     if (!interaction.nearbyBody) {
       interaction.hoverWorld.set(0, -999, 0);
@@ -3402,6 +3474,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     if (dragState.active || mousePanState.active) return;
     interaction.hoveredBody = null;
     interaction.nearbyBody = null;
+    interaction.hoverPigment.pointerBody = null;
     interaction.hoverWorld.set(0, -999, 0);
   });
 
@@ -3480,17 +3553,37 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     interaction.pressedBody = null;
     interaction.hoveredBody = null;
     interaction.nearbyBody = null;
+    interaction.hoverPigment.pointerBody = null;
+    interaction.hoverPigment.lastBody = null;
+    interaction.hoverPigment.lastTime = -Infinity;
     interaction.hoverWorld.set(0, -999, 0);
     interaction.pigment.active = false;
     uniforms.uPigmentStrength.value = 0;
 
-    if (interaction.homePose) {
-      const home = interaction.homePose;
-      cameraState.position.set(home.position.x, home.position.y, home.position.z);
-      cameraState.lookAt.set(home.target.x, home.target.y, home.target.z);
-      cameraState.targetPosition.copy(cameraState.position);
-      cameraState.targetLookAt.copy(cameraState.lookAt);
-    }
+    // A return is never an arrival: end any in-flight intro and restore the
+    // exact canonical overview instead of resuming a stale/panned camera.
+    markIntroSeenThisSession();
+    introSkipToEnd();
+    writeHeroPose(_introPos, _introLook);
+    cameraState.position.copy(_introPos);
+    cameraState.lookAt.copy(_introLook);
+    cameraState.targetPosition.copy(_introPos);
+    cameraState.targetLookAt.copy(_introLook);
+    clampNavigation();
+    cameraState.position.copy(cameraState.targetPosition);
+    cameraState.lookAt.copy(cameraState.targetLookAt);
+    interaction.homePose = {
+      position: {
+        x: cameraState.position.x,
+        y: cameraState.position.y,
+        z: cameraState.position.z,
+      },
+      target: {
+        x: cameraState.lookAt.x,
+        y: cameraState.lookAt.y,
+        z: cameraState.lookAt.z,
+      },
+    };
     commitLiveCamera();
   });
 
