@@ -2399,6 +2399,25 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       }),
     }),
   });
+  const BODY_ROUTES = Object.freeze({
+    projects: "/projects",
+  });
+
+  const FRAMER_ORIGIN =
+    "https://shaardulstrikesagain.framer.website";
+
+  const PAGE_PARAMS =
+    new URLSearchParams(window.location.search);
+
+  const CAMERA_DEBUG_ENABLED =
+    PAGE_PARAMS.get("cameraDebug") === "1";
+
+  const SECTION_NAVIGATION_DISABLED =
+    CAMERA_DEBUG_ENABLED ||
+    PAGE_PARAMS.get("qa") === "1";
+
+  const HANDOFF_CAMERA_FRACTION = 0.1;
+  const HANDOFF_CAMERA_MS = 120;
 
   const IDLE_PRESENCE = 0.88;
   const FULL_PRESENCE = 1.0;
@@ -2417,6 +2436,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     hoverWorld: new THREE.Vector3(0, -999, 0),
     homePose: null,
     camTravel: null,
+    handoff: {
+      active: false,
+      destination: null,
+    },
     pigment: {
       active: false,
       startTime: 0,
