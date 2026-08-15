@@ -2458,6 +2458,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
   }
 
+  function easeOutCubic(t) {
+    return 1 - Math.pow(1 - t, 3);
+  }
+
   function captureHomePoseIfNeeded() {
     if (interaction.homePose) return;
     interaction.homePose = {
@@ -2474,7 +2478,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     };
   }
 
-  function startCameraTravel(endPos, endLook, onComplete) {
+  function startCameraTravel(endPos, endLook, onComplete, options = {}) {
     captureHomePoseIfNeeded();
     interaction.isCameraTransitioning = true;
     interaction.camTravel = {
@@ -2491,7 +2495,8 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       endPos: { x: endPos.x, y: endPos.y, z: endPos.z },
       endLook: { x: endLook.x, y: endLook.y, z: endLook.z },
       t0: performance.now(),
-      duration: FOCUS_TRAVEL_MS,
+      duration: options.duration ?? FOCUS_TRAVEL_MS,
+      easing: options.easing ?? easeInOutCubic,
       onComplete: onComplete || null,
     };
     // Pre-seed navigation targets so handoff after travel has no snap.
@@ -2504,7 +2509,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     if (!travel) return false;
     const elapsed = performance.now() - travel.t0;
     const t = Math.min(1, elapsed / travel.duration);
-    const u = easeInOutCubic(t);
+    const u = travel.easing(t);
     cameraState.position.set(
       travel.startPos.x + (travel.endPos.x - travel.startPos.x) * u,
       travel.startPos.y + (travel.endPos.y - travel.startPos.y) * u,
@@ -2664,6 +2669,55 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       interaction.focusedBody = null;
       evaluatePointerAffinity(interaction.pointerX, interaction.pointerY);
     });
+  }
+
+  function beginSectionHandoff(body) {
+    if (!body || !BODY_ROUTES[body.id]) return false;
+    if (SECTION_NAVIGATION_DISABLED) return false;
+    if (interaction.handoff.active) return false;
+
+    const destination = BODY_ROUTES[body.id];
+    const pose = BODY_FOCUS_POSES[body.id];
+    if (!pose) return false;
+
+    captureHomePoseIfNeeded();
+    interaction.handoff.active = true;
+    interaction.handoff.destination = destination;
+    interaction.focusedBody = body;
+    interaction.hoveredBody = body;
+    interaction.nearbyBody = body;
+    triggerPigmentRipple(body);
+
+    const frac = HANDOFF_CAMERA_FRACTION;
+    const endPos = {
+      x: cameraState.position.x + (pose.position.x - cameraState.position.x) * frac,
+      y: cameraState.position.y + (pose.position.y - cameraState.position.y) * frac,
+      z: cameraState.position.z + (pose.position.z - cameraState.position.z) * frac,
+    };
+    const endLook = {
+      x: cameraState.lookAt.x + (pose.target.x - cameraState.lookAt.x) * frac,
+      y: cameraState.lookAt.y + (pose.target.y - cameraState.lookAt.y) * frac,
+      z: cameraState.lookAt.z + (pose.target.z - cameraState.lookAt.z) * frac,
+    };
+
+    startCameraTravel(endPos, endLook, null, {
+      duration: HANDOFF_CAMERA_MS,
+      easing: easeOutCubic,
+    });
+
+    if (window.parent === window) {
+      window.location.assign(`${FRAMER_ORIGIN}${destination}`);
+    } else {
+      window.parent.postMessage(
+        {
+          type: "shaardul:section-handoff",
+          destination,
+        },
+        FRAMER_ORIGIN
+      );
+    }
+
+    return true;
   }
 
   function updateBodyInteractionVisuals(dt) {
@@ -3309,6 +3363,11 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
     if (wasDragging) return;
 
+    const routeHit = pickBodyAtClient(x, y);
+    if (routeHit && BODY_ROUTES[routeHit.body.id]) {
+      if (beginSectionHandoff(routeHit.body)) return;
+    }
+
     // Short press → body select / return home / overview soft-focus
     clearTimeout(clickTimer);
     clickTimer = setTimeout(() => {
@@ -3403,6 +3462,36 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     keyPan.right = false;
     keyPan.up = false;
     keyPan.down = false;
+  });
+
+  window.addEventListener("message", (event) => {
+    if (event.origin !== FRAMER_ORIGIN) return;
+    if (!event.data || event.data.type !== "shaardul:reset-home") return;
+
+    interaction.handoff.active = false;
+    interaction.handoff.destination = null;
+    if (clickTimer) {
+      clearTimeout(clickTimer);
+      clickTimer = null;
+    }
+    interaction.camTravel = null;
+    interaction.isCameraTransitioning = false;
+    interaction.focusedBody = null;
+    interaction.pressedBody = null;
+    interaction.hoveredBody = null;
+    interaction.nearbyBody = null;
+    interaction.hoverWorld.set(0, -999, 0);
+    interaction.pigment.active = false;
+    uniforms.uPigmentStrength.value = 0;
+
+    if (interaction.homePose) {
+      const home = interaction.homePose;
+      cameraState.position.set(home.position.x, home.position.y, home.position.z);
+      cameraState.lookAt.set(home.target.x, home.target.y, home.target.z);
+      cameraState.targetPosition.copy(cameraState.position);
+      cameraState.targetLookAt.copy(cameraState.lookAt);
+    }
+    commitLiveCamera();
   });
 
   canvas.addEventListener("dblclick", (event) => {
