@@ -2435,6 +2435,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   });
   const BODY_ROUTES = Object.freeze({
     projects: "/projects",
+    about: "/about-me",
   });
 
   const FRAMER_ORIGIN =
@@ -2774,6 +2775,10 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
     if (window.parent === window) {
       window.location.assign(`${FRAMER_ORIGIN}${destination}`);
+    } else if (body.id === "about") {
+      // Framer only handles the Projects message. This runs during pointerup,
+      // while the embed has user activation for top-level navigation.
+      window.top.location.href = `${FRAMER_ORIGIN}${destination}`;
     } else {
       window.parent.postMessage(
         {
@@ -3433,7 +3438,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       /* already released */
     }
 
-    if (wasDragging) return;
+    if (wasDragging || event.type === "pointercancel") return;
 
     const routeHit = pickBodyAtClient(x, y);
     if (routeHit && BODY_ROUTES[routeHit.body.id]) {
