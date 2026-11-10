@@ -1,0 +1,102 @@
+<style>
+html { scrollbar-gutter: stable; background: #f8e8ce; }
+body { background: #f8e8ce; }
+html.shaardul-arriving::after { content: ''; position: fixed; inset: 0; background: #f8e8ce; z-index: 2147483647; pointer-events: none; animation: shaardul-reveal 220ms ease-out 120ms both; }
+@keyframes shaardul-reveal { from { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { html.shaardul-arriving::after { animation-duration: 1ms; animation-delay: 0ms; } }
+</style>
+<script>
+(() => {
+  const ORIGIN = 'https://stippled-ocean-final.vercel.app';
+  const routes = new Set(['/projects', '/about-me']);
+  const key = 'shaardul:particle-route';
+  const path = () => location.pathname.replace(/\/+$/, '') || '/';
+  const read = () => { try { return JSON.parse(sessionStorage.getItem(key)); } catch { return null; } };
+  const save = value => { try { sessionStorage.setItem(key, JSON.stringify(value)); } catch {} };
+  const remove = () => { try { sessionStorage.removeItem(key); } catch {} };
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const pending = read();
+  // Head-time cover prevents a first-paint flash on full document navigation.
+  if (pending && pending.destination === path() && Date.now() - pending.at < 10000) {
+    document.documentElement.classList.add('shaardul-arriving');
+  }
+  if (window.__shaardulParticleRoute) { window.__shaardulParticleRoute.onRoute?.(); return; }
+  const state = window.__shaardulParticleRoute = { leaving: false, needsReset: false, destination: null, veil: null, observer: null, timer: 0 };
+  const homeContents = () => document.querySelector('[data-framer-name="Page Contents"]');
+  function reveal() {
+    if (path() !== state.destination) return;
+    state.observer?.disconnect();
+    clearTimeout(state.timer);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (state.veil) {
+        const veil = state.veil;
+        veil.animate([{opacity: 1}, {opacity: 0}], {duration: reduced ? 0 : 220, easing: 'ease-out', fill: 'forwards'}).finished.then(() => veil.remove());
+        state.veil = null;
+      }
+      document.documentElement.classList.remove('shaardul-arriving');
+      remove();
+      state.leaving = false;
+    }));
+  }
+  function resetHome() {
+    if (path() !== '/') return;
+    clearTimeout(state.timer);
+    state.observer?.disconnect();
+    state.veil?.remove();
+    state.veil = null;
+    state.leaving = false;
+    state.needsReset = false;
+    state.destination = null;
+    document.documentElement.classList.remove('shaardul-arriving');
+    remove();
+    const content = homeContents();
+    if (content) { content.style.opacity = ''; content.style.transition = ''; content.style.pointerEvents = ''; }
+    document.querySelector('[data-framer-name="BG Stand In"] iframe')?.contentWindow?.postMessage({type:'shaardul:reset-home'}, ORIGIN);
+  }
+  window.addEventListener('message', event => {
+    const iframe = document.querySelector('[data-framer-name="BG Stand In"] iframe');
+    if (event.origin !== ORIGIN || event.source !== iframe?.contentWindow || path() !== '/') return;
+    const m = event.data;
+    if (!m || !routes.has(m.destination)) return;
+    if (m.type === 'shaardul:section-exit') {
+      if (state.leaving) return;
+      state.leaving = true;
+      state.needsReset = true;
+      state.destination = m.destination;
+      const content = homeContents();
+      if (content) { content.style.transition = `opacity ${reduced ? 80 : 160}ms ease-out`; content.style.opacity = '0'; content.style.pointerEvents = 'none'; }
+      // Recovery if an embed crashes or the handoff never arrives.
+      state.timer = setTimeout(resetHome, 5000);
+      return;
+    }
+    if (m.type !== 'shaardul:section-handoff') return;
+    if (state.veil) return;
+    state.leaving = true;
+      state.needsReset = true;
+    state.destination = m.destination;
+    save({destination:m.destination, at:Date.now()});
+    const veil = document.createElement('div');
+    veil.setAttribute('aria-hidden','true');
+    Object.assign(veil.style,{position:'fixed',inset:'0',background:'#f8e8ce',zIndex:'2147483647',pointerEvents:'none'});
+    document.body.append(veil); state.veil = veil;
+    state.observer = new MutationObserver(reveal);
+    state.observer.observe(document.getElementById('main') || document.body,{childList:true,subtree:true});
+    const link = [...document.querySelectorAll('a[href]')].find(a => {
+      const u = new URL(a.href, location.href); return u.origin === location.origin && u.pathname.replace(/\/+$/, '') === m.destination;
+    });
+    if (link) link.click(); else location.assign(m.destination);
+    clearTimeout(state.timer);
+    state.timer = setTimeout(() => { if (path() === state.destination) reveal(); else resetHome(); }, 4000);
+  });
+  window.addEventListener('pageshow', event => { if (event.persisted) resetHome(); });
+  window.addEventListener('popstate', () => setTimeout(resetHome, 0));
+  const boot = () => {
+    const p = read();
+    if (p && path() === p.destination) {
+      setTimeout(() => { document.documentElement.classList.remove('shaardul-arriving'); remove(); }, reduced ? 0 : 380);
+    } else if (path() === '/' && state.needsReset) resetHome();
+  };
+  state.onRoute = boot;
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
+})();
+</script>
