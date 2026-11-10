@@ -2738,7 +2738,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
   // Snapshot the final composited scene, including screen-space body contours.
   // GPU-only scatter: no readPixels, no per-particle JS updates, no camera travel.
-  const dissolve = { active: false, started: 0, duration: 480, sent: false,
+  const dissolve = { active: false, started: 0, duration: 560, sent: false,
     target: null, scene: new THREE.Scene(), camera: new THREE.Camera(), points: null };
 
   function disposeDissolve() {
@@ -2834,7 +2834,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     clearTimeout(clickTimer);
     canvas.style.pointerEvents = "none";
     captureDissolve();
-    dissolve.duration = matchMedia("(prefers-reduced-motion: reduce)").matches ? 100 : 480;
+    dissolve.duration = matchMedia("(prefers-reduced-motion: reduce)").matches ? 100 : 560;
     dissolve.started = performance.now();
     dissolve.sent = false;
     dissolve.active = true;
