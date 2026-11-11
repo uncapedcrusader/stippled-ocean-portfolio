@@ -2736,60 +2736,126 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     });
   }
 
-  function beginSectionHandoff(body) {
-    if (!body || !BODY_ROUTES[body.id]) return false;
-    if (SECTION_NAVIGATION_DISABLED) return false;
-    if (interaction.handoff.active) return false;
+  // Snapshot the final composited scene, including screen-space body contours.
+  // GPU-only scatter: no readPixels, no per-particle JS updates, no camera travel.
+  const dissolve = { active: false, started: 0, duration: 560, sent: false,
+    target: null, scene: new THREE.Scene(), camera: new THREE.Camera(), points: null };
 
-    const destination = BODY_ROUTES[body.id];
-    const pose = BODY_FOCUS_POSES[body.id];
-    if (!pose) return false;
-
-    const pigmentAlreadyHandledByHover =
-      interaction.hoverPigment.pointerBody === body;
-
-    captureHomePoseIfNeeded();
-    interaction.handoff.active = true;
-    interaction.handoff.destination = destination;
-    interaction.focusedBody = body;
-    interaction.hoveredBody = body;
-    interaction.nearbyBody = body;
-    if (!pigmentAlreadyHandledByHover) triggerPigmentRipple(body);
-
-    const frac = HANDOFF_CAMERA_FRACTION;
-    const endPos = {
-      x: cameraState.position.x + (pose.position.x - cameraState.position.x) * frac,
-      y: cameraState.position.y + (pose.position.y - cameraState.position.y) * frac,
-      z: cameraState.position.z + (pose.position.z - cameraState.position.z) * frac,
-    };
-    const endLook = {
-      x: cameraState.lookAt.x + (pose.target.x - cameraState.lookAt.x) * frac,
-      y: cameraState.lookAt.y + (pose.target.y - cameraState.lookAt.y) * frac,
-      z: cameraState.lookAt.z + (pose.target.z - cameraState.lookAt.z) * frac,
-    };
-
-    startCameraTravel(endPos, endLook, null, {
-      duration: HANDOFF_CAMERA_MS,
-      easing: easeOutCubic,
-    });
-
-    if (window.parent === window) {
-      window.location.assign(`${FRAMER_ORIGIN}${destination}`);
-    } else if (body.id === "about") {
-      // Framer only handles the Projects message. This runs during pointerup,
-      // while the embed has user activation for top-level navigation.
-      window.top.location.href = `${FRAMER_ORIGIN}${destination}`;
-    } else {
-      window.parent.postMessage(
-        {
-          type: "shaardul:section-handoff",
-          destination,
-        },
-        FRAMER_ORIGIN
-      );
+  function disposeDissolve() {
+    if (dissolve.points) {
+      dissolve.scene.remove(dissolve.points);
+      dissolve.points.geometry.dispose();
+      dissolve.points.material.dispose();
+      dissolve.points = null;
     }
+    if (dissolve.target) dissolve.target.dispose();
+    dissolve.target = null;
+    dissolve.active = false;
+    canvas.style.pointerEvents = "";
+  }
 
+  function captureDissolve() {
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const stride = Math.max(1, Math.ceil(Math.sqrt(size.x * size.y / 1100000)));
+    const cols = Math.ceil(size.x / stride), rows = Math.ceil(size.y / stride);
+    const vertices = new Float32Array(cols * rows * 3);
+    for (let y = 0, i = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++, i += 3) {
+        vertices[i] = (x + 0.5) / cols;
+        vertices[i + 1] = (y + 0.5) / rows;
+      }
+    }
+    dissolve.target = new THREE.WebGLRenderTarget(size.x, size.y, {
+      minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+      depthBuffer: true,
+    });
+    renderer.setRenderTarget(dissolve.target);
+    renderer.autoClear = true;
+    renderer.render(scene, camera);
+    renderer.autoClear = false;
+    renderContourComposite();
+    renderer.autoClear = true;
+    renderer.setRenderTarget(null);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
+    const m = new THREE.ShaderMaterial({
+      uniforms: {
+        uImage: { value: dissolve.target.texture },
+        uProgress: { value: 0 },
+        uBackground: { value: new THREE.Color(FINAL_LOOK.colours.background) },
+        uViewport: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+        uSize: { value: stride },
+        uReduced: { value: matchMedia("(prefers-reduced-motion: reduce)").matches ? 1 : 0 },
+      },
+      transparent: true, depthTest: false, depthWrite: false,
+      vertexShader: `
+        uniform sampler2D uImage;
+        uniform float uProgress, uSize, uReduced;
+        uniform vec2 uViewport;
+        uniform vec3 uBackground;
+        varying vec3 vColor;
+        varying float vAlpha;
+        float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        void main() {
+          vec2 uv = position.xy;
+          vColor = texture2D(uImage, uv).rgb;
+          float seed = hash(uv * 1927.0);
+          float p = clamp((uProgress - seed * 0.12) / 0.88, 0.0, 1.0);
+          float lift = p * p * (110.0 + seed * 160.0);
+          float drift = sin(seed * 40.0 + p * 3.0) * p * (18.0 + seed * 65.0);
+          vec2 offset = vec2(drift, lift) / uViewport * (1.0 - uReduced);
+          gl_Position = vec4((uv + offset) * 2.0 - 1.0, 0.0, 1.0);
+          gl_PointSize = max(1.0, uSize * (1.0 - p * 0.55));
+          vAlpha = (1.0 - smoothstep(0.15, 1.0, p));
+          if (distance(vColor, uBackground) < 0.012) vAlpha = 0.0;
+        }`,
+      fragmentShader: `
+        varying vec3 vColor;
+        varying float vAlpha;
+        void main() {
+          if (vAlpha < 0.005) discard;
+          gl_FragColor = vec4(vColor, vAlpha);
+          #include <colorspace_fragment>
+        }`,
+    });
+    dissolve.points = new THREE.Points(g, m);
+    dissolve.points.frustumCulled = false;
+    dissolve.scene.add(dissolve.points);
+  }
+
+  function beginSectionHandoff(body) {
+    if (!body || !BODY_ROUTES[body.id] || SECTION_NAVIGATION_DISABLED) return false;
+    if (interaction.handoff.active) return true;
+    interaction.handoff.active = true;
+    interaction.handoff.destination = BODY_ROUTES[body.id];
+    interaction.camTravel = null;
+    interaction.isCameraTransitioning = false;
+    syncCameraTargetsFromLive();
+    clearTimeout(clickTimer);
+    canvas.style.pointerEvents = "none";
+    captureDissolve();
+    dissolve.duration = matchMedia("(prefers-reduced-motion: reduce)").matches ? 100 : 560;
+    dissolve.started = performance.now();
+    dissolve.sent = false;
+    dissolve.active = true;
+    if (window.parent !== window) window.parent.postMessage({
+      type: "shaardul:section-exit", destination: interaction.handoff.destination,
+      duration: dissolve.duration,
+    }, FRAMER_ORIGIN);
     return true;
+  }
+
+  function renderDissolve() {
+    const progress = Math.min(1, (performance.now() - dissolve.started) / dissolve.duration);
+    dissolve.points.material.uniforms.uProgress.value = progress;
+    renderer.autoClear = true;
+    renderer.render(dissolve.scene, dissolve.camera);
+    if (progress === 1 && !dissolve.sent) {
+      dissolve.sent = true;
+      const destination = interaction.handoff.destination;
+      if (window.parent === window) window.location.assign(`${FRAMER_ORIGIN}${destination}`);
+      else window.parent.postMessage({ type: "shaardul:section-handoff", destination }, FRAMER_ORIGIN);
+    }
   }
 
   function updateBodyInteractionVisuals(dt) {
@@ -3546,6 +3612,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     if (event.origin !== FRAMER_ORIGIN) return;
     if (!event.data || event.data.type !== "shaardul:reset-home") return;
 
+    disposeDissolve();
     interaction.handoff.active = false;
     interaction.handoff.destination = null;
     if (clickTimer) {
@@ -3688,6 +3755,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
   function animate() {
     requestAnimationFrame(animate);
     applyResizeIfNeeded();
+    if (dissolve.active) { renderDissolve(); return; }
     const time = clock.getElapsedTime();
     uniforms.uTime.value = time;
     syncSplashUniforms(time);
